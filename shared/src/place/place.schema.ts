@@ -21,14 +21,15 @@ const open = z.record(z.string(), z.unknown());
  * categories row (id/name/color/icon), built inline by placeService and
  * getPlaceWithTags. `null` when the place has no category_id.
  */
-export const placeCategorySchema = z
-  .object({
-    id: z.number(),
-    name: z.string().nullable(),
-    color: z.string().nullable(),
-    icon: z.string().nullable(),
-  })
-  .nullable();
+export const placeCategoryItemSchema = z.object({
+  id: z.number(),
+  name: z.string().nullable(),
+  color: z.string().nullable(),
+  icon: z.string().nullable(),
+});
+export type PlaceCategoryItem = z.infer<typeof placeCategoryItemSchema>;
+
+export const placeCategorySchema = placeCategoryItemSchema.nullable();
 export type PlaceCategory = z.infer<typeof placeCategorySchema>;
 
 /**
@@ -67,6 +68,8 @@ export const placeSchema = z.object({
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
   category: placeCategorySchema.optional(),
+  additional_category_ids: z.array(z.number()),
+  additional_categories: z.array(placeCategoryItemSchema),
   tags: z.array(tagSchema.partial()).optional(),
 });
 export type Place = z.infer<typeof placeSchema>;
@@ -98,14 +101,30 @@ export const assignmentPlaceSchema = z.object({
   website: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   category: placeCategorySchema.optional(),
+  additional_category_ids: z.array(z.number()),
+  additional_categories: z.array(placeCategoryItemSchema),
   tags: z.array(tagSchema.partial()).optional(),
 });
 export type AssignmentPlace = z.infer<typeof assignmentPlaceSchema>;
 
-export const placeCreateRequestSchema = open.and(z.object({ name: z.string().min(1) }));
+export const placeCategoryIdSchema = z.number().int().positive();
+export const additionalCategoryIdsSchema = z.array(placeCategoryIdSchema);
+
+export const placeCreateRequestSchema = open.and(
+  z.object({
+    name: z.string().min(1),
+    category_id: placeCategoryIdSchema.nullable().optional(),
+    additional_category_ids: additionalCategoryIdsSchema.optional(),
+  }),
+);
 export type PlaceCreateRequest = z.infer<typeof placeCreateRequestSchema>;
 
-export const placeUpdateRequestSchema = open;
+export const placeUpdateRequestSchema = open.and(
+  z.object({
+    category_id: placeCategoryIdSchema.nullable().optional(),
+    additional_category_ids: additionalCategoryIdsSchema.optional(),
+  }),
+);
 export type PlaceUpdateRequest = z.infer<typeof placeUpdateRequestSchema>;
 
 export const placeBulkDeleteRequestSchema = z.object({
@@ -113,12 +132,18 @@ export const placeBulkDeleteRequestSchema = z.object({
 });
 export type PlaceBulkDeleteRequest = z.infer<typeof placeBulkDeleteRequestSchema>;
 
-export const placeBulkUpdateRequestSchema = z.object({
-  ids: z.array(z.number()).min(1),
-  // null clears the category ("No category"); a number sets it. Optional so the
-  // field can be omitted, but the endpoint requires it to be present to act.
-  category_id: z.number().nullable().optional(),
-});
+export const placeBulkUpdateRequestSchema = z
+  .object({
+    ids: z.array(z.number()).min(1),
+    // null clears the primary category. Omitted fields preserve their stored set.
+    category_id: placeCategoryIdSchema.nullable().optional(),
+    // An empty array explicitly clears all additional categories.
+    additional_category_ids: additionalCategoryIdsSchema.optional(),
+  })
+  .refine(
+    ({ category_id, additional_category_ids }) => category_id !== undefined || additional_category_ids !== undefined,
+    'Provide at least one field to update',
+  );
 export type PlaceBulkUpdateRequest = z.infer<typeof placeBulkUpdateRequestSchema>;
 
 export const placeImportListRequestSchema = z.object({
@@ -133,6 +158,7 @@ export type PlaceImportListRequest = z.infer<typeof placeImportListRequestSchema
 export const placeListQuerySchema = z.object({
   search: z.string().optional(),
   category: z.string().optional(),
+  category_ids: additionalCategoryIdsSchema.optional(),
   tag: z.string().optional(),
 });
 export type PlaceListQuery = z.infer<typeof placeListQuerySchema>;

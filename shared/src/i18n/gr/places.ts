@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Εμπλουτισμός τόπων μέσω Google',
   'places.enrichOnImportHint':
     'Αναζητά κάθε εισαγόμενο μέρος για να προσθέσει φωτογραφίες, διεύθυνση και στοιχεία επικοινωνίας. Απαιτεί κλειδί Google Maps.',
+  'places.formAdditionalCategories': 'Πρόσθετες κατηγορίες',
+  'places.addAdditionalCategory': 'Προσθήκη άλλης κατηγορίας',
+  'places.removeAdditionalCategory': 'Αφαίρεση {name}',
+  'places.primaryCategory': 'Κύρια κατηγορία',
 };
 export default places;

@@ -90,5 +90,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Yerleri Google ile zenginleştir',
   'places.enrichOnImportHint':
     'İçe aktarılan her yeri arayarak fotoğraf, adres ve iletişim bilgilerini ekler. Google Maps anahtarı gerekir.',
+  'places.formAdditionalCategories': 'Ek kategoriler',
+  'places.addAdditionalCategory': 'Başka kategori ekle',
+  'places.removeAdditionalCategory': '{name} kategorisini kaldır',
+  'places.primaryCategory': 'Birincil kategori',
 };
 export default places;

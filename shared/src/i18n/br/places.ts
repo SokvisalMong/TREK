@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Enriquecer lugares via Google',
   'places.enrichOnImportHint':
     'Busca cada lugar importado para adicionar fotos, endereço e contato. Usa sua chave do Google Maps.',
+  'places.formAdditionalCategories': 'Categorias adicionais',
+  'places.addAdditionalCategory': 'Adicionar outra categoria',
+  'places.removeAdditionalCategory': 'Remover {name}',
+  'places.primaryCategory': 'Categoria principal',
 };
 export default places;

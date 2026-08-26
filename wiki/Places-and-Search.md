@@ -46,12 +46,21 @@ Type or paste a `lat, lng` pair (e.g. `48.8566, 2.3522`) into the **Latitude** f
 | Notes | Free text, max 2 000 characters |
 | Address | Free text |
 | Latitude / Longitude | Decimal degrees |
-| Category | Pick an existing category or type a new name to create one inline (default color `#6366f1`, icon `MapPin`) |
+| Primary category | Pick one shared category. It controls the map marker icon/color and compact list icon. |
+| Additional categories | Pick any number of other shared categories. They appear as badges and participate in filters without changing marker styling. |
 | Start time / End time | Shown only when editing an existing place |
 | Website | URL |
 | File attachments | Images or PDFs — click the Paperclip icon or paste from the clipboard |
 
 Two inline warnings are shown when editing times: one if the end time is set to a value before or equal to the start time, and one if the times overlap with another place already assigned to the same day.
+
+## Filtering by category
+
+Select one or more categories in the Places sidebar. A place matches when any selected category is either its primary category or one of its additional categories. Multiple selections use OR semantics, and a place that matches several selections is listed once.
+
+**Uncategorized** only includes places with no primary and no additional categories. Clearing a primary category does not remove additional categories.
+
+Map and POI search provider types are not automatically converted into your instance's shared categories; category assignment remains explicit.
 
 ## Importing multiple places
 

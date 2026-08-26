@@ -1,5 +1,5 @@
-import type { Place } from '../../types'
-import type { SaveToCollectionTarget } from '../../store/saveToCollectionStore'
+import type { SaveToCollectionTarget } from '../../store/saveToCollectionStore';
+import type { Place } from '../../types';
 
 /**
  * Build a Save-to-Collection picker target from a trip pool place, carrying the
@@ -15,6 +15,7 @@ export function placeToSaveTarget(place: Place): SaveToCollectionTarget {
     lng: place.lng ?? null,
     address: place.address ?? null,
     category_id: place.category_id ?? null,
+    additional_category_ids: place.additional_category_ids ?? [],
     price: place.price ?? null,
     currency: place.currency ?? null,
     notes: place.notes ?? null,
@@ -24,5 +25,5 @@ export function placeToSaveTarget(place: Place): SaveToCollectionTarget {
     osm_id: place.osm_id ?? null,
     website: place.website ?? null,
     phone: place.phone ?? null,
-  }
+  };
 }

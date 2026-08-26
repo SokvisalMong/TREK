@@ -7,11 +7,20 @@
  * - PLACE-014: reordering within a day is tested in assignments.test.ts
  * - PLACE-019: GPX bulk import tested here using the test fixture
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
-import request from 'supertest';
-import type { Application } from 'express';
+import { buildApp } from '../../src/bootstrap';
+import { runMigrations } from '../../src/db/migrations';
+import { createTables } from '../../src/db/schema';
+import { invalidatePermissionsCache } from '../../src/services/permissions';
+import * as placeService from '../../src/services/placeService';
+import { authCookie } from '../helpers/auth';
+import { addTripMember, createAdmin, createCategory, createPlace, createTrip, createUser } from '../helpers/factories';
+import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import type { INestApplication } from '@nestjs/common';
+
+import type { Application } from 'express';
 import path from 'path';
+import request from 'supertest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 
 const { testDb, dbMock } = vi.hoisted(() => {
   const Database = require('better-sqlite3');
@@ -24,13 +33,45 @@ const { testDb, dbMock } = vi.hoisted(() => {
     closeDb: () => {},
     reinitialize: () => {},
     getPlaceWithTags: (placeId: number) => {
-      const place: any = db.prepare(`SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon FROM places p LEFT JOIN categories c ON p.category_id = c.id WHERE p.id = ?`).get(placeId);
+      const place: any = db
+        .prepare(
+          `SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon FROM places p LEFT JOIN categories c ON p.category_id = c.id WHERE p.id = ?`,
+        )
+        .get(placeId);
       if (!place) return null;
-      const tags = db.prepare(`SELECT t.* FROM tags t JOIN place_tags pt ON t.id = pt.tag_id WHERE pt.place_id = ?`).all(placeId);
-      return { ...place, category: place.category_id ? { id: place.category_id, name: place.category_name, color: place.category_color, icon: place.category_icon } : null, tags };
+      const tags = db
+        .prepare(`SELECT t.* FROM tags t JOIN place_tags pt ON t.id = pt.tag_id WHERE pt.place_id = ?`)
+        .all(placeId);
+      const additionalCategories = db
+        .prepare(
+          `SELECT c.id, c.name, c.color, c.icon
+           FROM place_additional_categories pac
+           JOIN categories c ON c.id = pac.category_id
+           WHERE pac.place_id = ?
+           ORDER BY c.name, c.id`,
+        )
+        .all(placeId) as Array<{ id: number; name: string; color: string; icon: string }>;
+      return {
+        ...place,
+        category: place.category_id
+          ? {
+              id: place.category_id,
+              name: place.category_name,
+              color: place.category_color,
+              icon: place.category_icon,
+            }
+          : null,
+        additional_category_ids: additionalCategories.map(({ id }) => id),
+        additional_categories: additionalCategories,
+        tags,
+      };
     },
     canAccessTrip: (tripId: any, userId: number) =>
-      db.prepare(`SELECT t.id, t.user_id FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)`).get(userId, tripId, userId),
+      db
+        .prepare(
+          `SELECT t.id, t.user_id FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)`,
+        )
+        .get(userId, tripId, userId),
     isOwner: (tripId: any, userId: number) =>
       !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId),
   };
@@ -56,15 +97,6 @@ vi.mock('../../src/services/placeService', async (importOriginal) => {
     searchPlaceImage: vi.fn(),
   };
 });
-
-import { buildApp } from '../../src/bootstrap';
-import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
-import { resetTestDb, resetRateLimits } from '../helpers/test-db';
-import { createUser, createAdmin, createTrip, createPlace, addTripMember } from '../helpers/factories';
-import { authCookie } from '../helpers/auth';
-import * as placeService from '../../src/services/placeService';
-import { invalidatePermissionsCache } from '../../src/services/permissions';
 
 let nestApp: INestApplication;
 let app: Application;
@@ -160,6 +192,35 @@ describe('Create place', () => {
   });
 });
 
+it('creates normalized additional categories and rejects unknown ids atomically', async () => {
+  const { user } = createUser(testDb);
+  const trip = createTrip(testDb, user.id);
+  const primary = createCategory(testDb, { name: 'Hotel' });
+  const additional = createCategory(testDb, { name: 'Cafe' });
+
+  const created = await request(app)
+    .post(`/api/trips/${trip.id}/places`)
+    .set('Cookie', authCookie(user.id))
+    .send({
+      name: 'Hotel cafe',
+      category_id: primary.id,
+      additional_category_ids: [additional.id, additional.id, primary.id],
+    });
+  expect(created.status).toBe(201);
+  expect(created.body.place).toMatchObject({
+    category_id: primary.id,
+    additional_category_ids: [additional.id],
+    additional_categories: [{ id: additional.id, name: 'Cafe' }],
+  });
+
+  const invalid = await request(app)
+    .post(`/api/trips/${trip.id}/places`)
+    .set('Cookie', authCookie(user.id))
+    .send({ name: 'Invalid', additional_category_ids: [999_999] });
+  expect(invalid.status).toBe(400);
+  expect(invalid.body).toEqual({ error: 'Unknown category id: 999999' });
+  expect(testDb.prepare('SELECT COUNT(*) AS count FROM places WHERE trip_id = ?').get(trip.id)).toEqual({ count: 1 });
+});
 // ─────────────────────────────────────────────────────────────────────────────
 // List places
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,9 +232,7 @@ describe('List places', () => {
     createPlace(testDb, trip.id, { name: 'Place A' });
     createPlace(testDb, trip.id, { name: 'Place B' });
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(2);
   });
@@ -185,9 +244,7 @@ describe('List places', () => {
     addTripMember(testDb, trip.id, member.id);
     createPlace(testDb, trip.id, { name: 'Shared Place' });
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places`)
-      .set('Cookie', authCookie(member.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places`).set('Cookie', authCookie(member.id));
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(1);
   });
@@ -197,9 +254,7 @@ describe('List places', () => {
     const { user: other } = createUser(testDb);
     const trip = createTrip(testDb, owner.id);
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places`)
-      .set('Cookie', authCookie(other.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places`).set('Cookie', authCookie(other.id));
     expect(res.status).toBe(404);
   });
 
@@ -223,6 +278,35 @@ describe('List places', () => {
   });
 });
 
+it('matches primary or additional category_ids with OR semantics and true uncategorized behavior', async () => {
+  const { user } = createUser(testDb);
+  const trip = createTrip(testDb, user.id);
+  const hotel = createCategory(testDb, { name: 'Hotel REST filter' });
+  const cafe = createCategory(testDb, { name: 'Cafe REST filter' });
+  const mixed = createPlace(testDb, trip.id, { name: 'Mixed', category_id: hotel.id });
+  const additionalOnly = createPlace(testDb, trip.id, { name: 'Additional only', category_id: null });
+  const uncategorized = createPlace(testDb, trip.id, { name: 'Uncategorized', category_id: null });
+  testDb.prepare('UPDATE places SET category_id = NULL WHERE id IN (?, ?)').run(additionalOnly.id, uncategorized.id);
+  testDb
+    .prepare('INSERT INTO place_additional_categories (place_id, category_id) VALUES (?, ?), (?, ?)')
+    .run(mixed.id, cafe.id, additionalOnly.id, cafe.id);
+
+  const filtered = await request(app)
+    .get(`/api/trips/${trip.id}/places`)
+    .query({ category_ids: [hotel.id, cafe.id] })
+    .set('Cookie', authCookie(user.id));
+  expect(filtered.status).toBe(200);
+  expect(filtered.body.places.map((place: { id: number }) => place.id).sort()).toEqual(
+    [mixed.id, additionalOnly.id].sort(),
+  );
+
+  const uncategorizedResult = await request(app)
+    .get(`/api/trips/${trip.id}/places`)
+    .query({ category: 'uncategorized' })
+    .set('Cookie', authCookie(user.id));
+  expect(uncategorizedResult.status).toBe(200);
+  expect(uncategorizedResult.body.places.map((place: { id: number }) => place.id)).toEqual([uncategorized.id]);
+});
 // ─────────────────────────────────────────────────────────────────────────────
 // Get single place
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,9 +317,7 @@ describe('Get place', () => {
     const trip = createTrip(testDb, user.id);
     const place = createPlace(testDb, trip.id, { name: 'Test Place' });
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places/${place.id}`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places/${place.id}`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.body.place.id).toBe(place.id);
     expect(Array.isArray(res.body.place.tags)).toBe(true);
@@ -245,9 +327,7 @@ describe('Get place', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places/99999`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places/99999`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(404);
   });
 });
@@ -283,6 +363,80 @@ describe('Update place', () => {
   });
 });
 
+it('preserves omitted additional categories, clears [], and removes a promoted primary', async () => {
+  const { user } = createUser(testDb);
+  const trip = createTrip(testDb, user.id);
+  const oldPrimary = createCategory(testDb, { name: 'Old primary' });
+  const newPrimary = createCategory(testDb, { name: 'New primary' });
+  const retained = createCategory(testDb, { name: 'Retained' });
+  const created = await request(app)
+    .post(`/api/trips/${trip.id}/places`)
+    .set('Cookie', authCookie(user.id))
+    .send({
+      name: 'Editable',
+      category_id: oldPrimary.id,
+      additional_category_ids: [newPrimary.id, retained.id],
+    });
+  const placeId = created.body.place.id;
+
+  const preserved = await request(app)
+    .put(`/api/trips/${trip.id}/places/${placeId}`)
+    .set('Cookie', authCookie(user.id))
+    .send({ notes: 'legacy update' });
+  expect(preserved.status).toBe(200);
+  expect(preserved.body.place.additional_category_ids.sort()).toEqual([newPrimary.id, retained.id].sort());
+
+  const promoted = await request(app)
+    .put(`/api/trips/${trip.id}/places/${placeId}`)
+    .set('Cookie', authCookie(user.id))
+    .send({ category_id: newPrimary.id });
+  expect(promoted.status).toBe(200);
+  expect(promoted.body.place.additional_category_ids).toEqual([retained.id]);
+
+  const cleared = await request(app)
+    .put(`/api/trips/${trip.id}/places/${placeId}`)
+    .set('Cookie', authCookie(user.id))
+    .send({ additional_category_ids: [] });
+  expect(cleared.status).toBe(200);
+  expect(cleared.body.place.additional_category_ids).toEqual([]);
+});
+
+it('bulk-replaces and normalizes additional categories', async () => {
+  const { user } = createUser(testDb);
+  const trip = createTrip(testDb, user.id);
+  const firstPrimary = createCategory(testDb, { name: 'First primary' });
+  const secondPrimary = createCategory(testDb, { name: 'Second primary' });
+  const additional = createCategory(testDb, { name: 'Shared additional' });
+  const first = createPlace(testDb, trip.id, { name: 'First', category_id: firstPrimary.id });
+  const second = createPlace(testDb, trip.id, { name: 'Second', category_id: secondPrimary.id });
+
+  const result = await request(app)
+    .post(`/api/trips/${trip.id}/places/bulk-update`)
+    .set('Cookie', authCookie(user.id))
+    .send({
+      ids: [first.id, second.id],
+      additional_category_ids: [firstPrimary.id, secondPrimary.id, additional.id],
+    });
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({ updated: [first.id, second.id], count: 2 });
+  expect(
+    testDb
+      .prepare(
+        `SELECT place_id, category_id
+           FROM place_additional_categories
+           WHERE place_id IN (?, ?)
+           ORDER BY place_id, category_id`,
+      )
+      .all(first.id, second.id),
+  ).toEqual(
+    [
+      { place_id: first.id, category_id: secondPrimary.id },
+      { place_id: first.id, category_id: additional.id },
+      { place_id: second.id, category_id: firstPrimary.id },
+      { place_id: second.id, category_id: additional.id },
+    ].sort((left, right) => left.place_id - right.place_id || left.category_id - right.category_id),
+  );
+});
 // ─────────────────────────────────────────────────────────────────────────────
 // Delete place
 // ─────────────────────────────────────────────────────────────────────────────
@@ -299,9 +453,7 @@ describe('Delete place', () => {
     expect(del.status).toBe(200);
     expect(del.body.success).toBe(true);
 
-    const get = await request(app)
-      .get(`/api/trips/${trip.id}/places/${place.id}`)
-      .set('Cookie', authCookie(user.id));
+    const get = await request(app).get(`/api/trips/${trip.id}/places/${place.id}`).set('Cookie', authCookie(user.id));
     expect(get.status).toBe(404);
   });
 
@@ -329,9 +481,7 @@ describe('Tags', () => {
     // Create a tag in DB
     testDb.prepare('INSERT INTO tags (name, user_id) VALUES (?, ?)').run('Must-see', user.id);
 
-    const res = await request(app)
-      .get('/api/tags')
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get('/api/tags').set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.body.tags).toBeDefined();
     const names = (res.body.tags as any[]).map((t: any) => t.name);
@@ -364,9 +514,7 @@ describe('Tags', () => {
     const tagResult = testDb.prepare('INSERT INTO tags (name, user_id) VALUES (?, ?)').run('OldTag', user.id);
     const tagId = tagResult.lastInsertRowid as number;
 
-    const res = await request(app)
-      .delete(`/api/tags/${tagId}`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).delete(`/api/tags/${tagId}`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
 
     const tags = await request(app).get('/api/tags').set('Cookie', authCookie(user.id));
@@ -471,9 +619,7 @@ describe('Search places', () => {
     createPlace(testDb, trip.id, { name: 'Eiffel Tower' });
     createPlace(testDb, trip.id, { name: 'Arc de Triomphe' });
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places?search=Eiffel`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places?search=Eiffel`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(1);
     expect(res.body.places[0].name).toBe('Eiffel Tower');
@@ -495,9 +641,7 @@ describe('Search places', () => {
 
     createPlace(testDb, trip.id, { name: 'Plain Place' });
 
-    const res = await request(app)
-      .get(`/api/trips/${trip.id}/places?tag=${tagId}`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get(`/api/trips/${trip.id}/places?tag=${tagId}`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(1);
     expect(res.body.places[0].name).toBe('Scenic Place');
@@ -511,9 +655,7 @@ describe('Search places', () => {
 describe('Categories', () => {
   it('PLACE-015 — GET /api/categories returns all categories', async () => {
     const { user } = createUser(testDb);
-    const res = await request(app)
-      .get('/api/categories')
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).get('/api/categories').set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.categories)).toBe(true);
     expect(res.body.categories.length).toBeGreaterThan(0);
@@ -540,7 +682,8 @@ describe('Naver list import', () => {
 
     testDb.prepare("UPDATE addons SET enabled = 1 WHERE id = 'naver_list_import'").run();
 
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         url: `https://map.naver.com/v5/favorite/myPlace/folder/${folderId}`,
@@ -551,7 +694,13 @@ describe('Naver list import', () => {
           folder: { name: 'Seoul Food', bookmarkCount: 22 },
           bookmarkList: [
             { name: 'SINSAJEON', px: 127.0226195, py: 37.5186363, memo: null, address: 'Sinsa-dong Seoul' },
-            { name: 'Ilpyeondeungsim', px: 126.9852986, py: 37.5629334, memo: 'Try lunch set', address: 'Myeong-dong Seoul' },
+            {
+              name: 'Ilpyeondeungsim',
+              px: 126.9852986,
+              py: 37.5629334,
+              memo: 'Try lunch set',
+              address: 'Myeong-dong Seoul',
+            },
           ],
         }),
       })
@@ -608,8 +757,7 @@ describe('Naver list import', () => {
 
     testDb.prepare("UPDATE addons SET enabled = 1 WHERE id = 'naver_list_import'").run();
 
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({ ok: false });
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: false });
 
     vi.stubGlobal('fetch', fetchMock);
 
@@ -685,7 +833,7 @@ describe('Naver list import', () => {
       ok: true,
       json: async () => ({
         folder: { name: 'Seoul', bookmarkCount: 1 },
-        bookmarkList: [{ name: 'Gyeongbokgung', px: 126.9770, py: 37.5796, memo: null, address: 'Sejongno Seoul' }],
+        bookmarkList: [{ name: 'Gyeongbokgung', px: 126.977, py: 37.5796, memo: null, address: 'Sejongno Seoul' }],
       }),
     });
 
@@ -724,9 +872,7 @@ describe('GPX Import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    const res = await request(app)
-      .post(`/api/trips/${trip.id}/places/import/gpx`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).post(`/api/trips/${trip.id}/places/import/gpx`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(400);
   });
 });
@@ -740,7 +886,8 @@ describe('KML/KMZ Import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    testDb.prepare('INSERT INTO categories (name, color, icon, user_id) VALUES (?, ?, ?, ?)')
+    testDb
+      .prepare('INSERT INTO categories (name, color, icon, user_id) VALUES (?, ?, ?, ?)')
       .run('Museums', '#3b82f6', 'Landmark', user.id);
 
     const res = await request(app)
@@ -766,7 +913,8 @@ describe('KML/KMZ Import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    testDb.prepare('INSERT INTO categories (name, color, icon, user_id) VALUES (?, ?, ?, ?)')
+    testDb
+      .prepare('INSERT INTO categories (name, color, icon, user_id) VALUES (?, ?, ?, ?)')
       .run('Parks', '#22c55e', 'Trees', user.id);
 
     const res = await request(app)
@@ -808,7 +956,9 @@ describe('KML/KMZ Import', () => {
 
     const prefix = Buffer.from('<?xml version="1.0"?><kml><Document><Placemark><name>Caf');
     const invalidByte = Buffer.from([0xe9]); // invalid UTF-8 sequence when used standalone
-    const suffix = Buffer.from('</name><Point><coordinates>2.1,48.1,0</coordinates></Point></Placemark></Document></kml>');
+    const suffix = Buffer.from(
+      '</name><Point><coordinates>2.1,48.1,0</coordinates></Point></Placemark></Document></kml>',
+    );
     const nonUtf8Kml = Buffer.concat([prefix, invalidByte, suffix]);
 
     const res = await request(app)
@@ -861,8 +1011,7 @@ describe('GPX Import — edge cases', () => {
 
     // Minimal valid GPX with no waypoints, tracks, or routes
     const emptyGpx = Buffer.from(
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-      '<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"></gpx>'
+      '<?xml version="1.0" encoding="UTF-8"?>' + '<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"></gpx>',
     );
 
     const res = await request(app)
@@ -1019,9 +1168,7 @@ describe('Delete place — not found', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    const res = await request(app)
-      .delete(`/api/trips/${trip.id}/places/99999`)
-      .set('Cookie', authCookie(user.id));
+    const res = await request(app).delete(`/api/trips/${trip.id}/places/99999`).set('Cookie', authCookie(user.id));
     expect(res.status).toBe(404);
   });
 });

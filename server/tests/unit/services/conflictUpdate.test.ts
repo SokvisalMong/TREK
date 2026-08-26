@@ -3,6 +3,14 @@
  * update services. A matching If-Match token (or none) updates as before; a
  * stale token returns the conflict sentinel carrying the server's current row.
  */
+import { runMigrations } from '../../../src/db/migrations';
+import { createTables } from '../../../src/db/schema';
+import { isUpdateConflict } from '../../../src/services/conflictResult';
+import { createItem, updateItem } from '../../../src/services/packingService';
+import { updatePlace, createPlace } from '../../../src/services/placeService';
+import { createCategory, createUser, createTrip } from '../../helpers/factories';
+import { resetTestDb } from '../../helpers/test-db';
+
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 
 const { testDb, dbMock } = vi.hoisted(() => {
@@ -12,9 +20,26 @@ const { testDb, dbMock } = vi.hoisted(() => {
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA busy_timeout = 5000');
   function getPlaceWithTags(placeId: number | string) {
-    const p = db.prepare('SELECT * FROM places WHERE id = ?').get(placeId);
-    if (!p) return null;
-    return { ...(p as object), category: null, tags: [] };
+    const place = db.prepare('SELECT * FROM places WHERE id = ?').get(placeId) as
+      | ({ id: number } & Record<string, unknown>)
+      | undefined;
+    if (!place) return null;
+    const additionalCategories = db
+      .prepare(
+        `SELECT c.id, c.name, c.color, c.icon
+         FROM place_additional_categories pac
+         JOIN categories c ON c.id = pac.category_id
+         WHERE pac.place_id = ?
+         ORDER BY c.name, c.id`,
+      )
+      .all(placeId) as Array<{ id: number; name: string; color: string; icon: string }>;
+    return {
+      ...place,
+      category: null,
+      additional_category_ids: additionalCategories.map(({ id }) => id),
+      additional_categories: additionalCategories,
+      tags: [],
+    };
   }
   const mock = {
     db,
@@ -33,14 +58,6 @@ vi.mock('../../../src/config', () => ({
   ENCRYPTION_KEY: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2',
   updateJwtSecret: () => {},
 }));
-
-import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
-import { resetTestDb } from '../../helpers/test-db';
-import { createUser, createTrip } from '../../helpers/factories';
-import { updatePlace, createPlace } from '../../../src/services/placeService';
-import { createItem, updateItem } from '../../../src/services/packingService';
-import { isUpdateConflict } from '../../../src/services/conflictResult';
 
 beforeAll(() => {
   createTables(testDb);
@@ -96,6 +113,32 @@ describe('updatePlace — optimistic concurrency', () => {
     expect(row.name).toBe('Original');
   });
 
+  it('returns normalized additional categories in a stale-write conflict', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const category = createCategory(testDb, { name: 'Cafe' });
+    const place = createPlace(String(trip.id), {
+      name: 'Original',
+      additional_category_ids: [category.id],
+    });
+    if (!place) throw new Error('Expected place creation to succeed');
+
+    const result = updatePlace(
+      String(trip.id),
+      String(place.id),
+      { additional_category_ids: [] },
+      '1999-01-01 00:00:00',
+    );
+    expect(isUpdateConflict(result)).toBe(true);
+    if (isUpdateConflict(result)) {
+      const server = result.server;
+      expect(server).toMatchObject({
+        additional_category_ids: [category.id],
+        additional_categories: [{ id: category.id, name: 'Cafe' }],
+      });
+    }
+  });
+
   it('returns null for a place that does not exist', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
@@ -106,7 +149,7 @@ describe('updatePlace — optimistic concurrency', () => {
 describe('updateItem (packing) — optimistic concurrency', () => {
   it('migration added updated_at and createItem stamps it', () => {
     const cols = testDb.prepare("PRAGMA table_info('packing_items')").all() as { name: string }[];
-    expect(cols.map(c => c.name)).toContain('updated_at');
+    expect(cols.map((c) => c.name)).toContain('updated_at');
 
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
@@ -126,4 +169,4 @@ describe('updateItem (packing) — optimistic concurrency', () => {
     expect(isUpdateConflict(fresh)).toBe(false);
     expect((fresh as { name: string }).name).toBe('Edited');
   });
-})
+});

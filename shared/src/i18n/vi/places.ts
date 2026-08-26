@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Làm phong phú các địa điểm thông qua Google',
   'places.enrichOnImportHint':
     'Tra cứu từng địa điểm đã nhập để điền ảnh, địa chỉ và thông tin liên hệ. Sử dụng khóa Google Maps của bạn.',
+  'places.formAdditionalCategories': 'Danh mục bổ sung',
+  'places.addAdditionalCategory': 'Thêm danh mục khác',
+  'places.removeAdditionalCategory': 'Xóa {name}',
+  'places.primaryCategory': 'Danh mục chính',
 };
 export default places;

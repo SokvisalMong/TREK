@@ -87,5 +87,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Googleで場所を補完',
   'places.enrichOnImportHint':
     'インポートした各場所を検索して、写真・住所・連絡先を追加します。Google Maps キーが必要です。',
+  'places.formAdditionalCategories': '追加カテゴリ',
+  'places.addAdditionalCategory': '別のカテゴリを追加',
+  'places.removeAdditionalCategory': '{name}を削除',
+  'places.primaryCategory': 'メインカテゴリ',
 };
 export default places;

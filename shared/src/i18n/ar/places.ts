@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'إثراء الأماكن عبر Google',
   'places.enrichOnImportHint':
     'يبحث عن كل مكان مستورد لإضافة الصور والعنوان وبيانات الاتصال. يتطلب مفتاح خرائط Google.',
+  'places.formAdditionalCategories': 'فئات إضافية',
+  'places.addAdditionalCategory': 'إضافة فئة أخرى',
+  'places.removeAdditionalCategory': 'إزالة {name}',
+  'places.primaryCategory': 'الفئة الأساسية',
 };
 export default places;

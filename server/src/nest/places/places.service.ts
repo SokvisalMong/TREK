@@ -1,10 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import { broadcast } from '../../websocket';
 import { canAccessTrip } from '../../db/database';
-import { checkPermission } from '../../services/permissions';
-import type { User } from '../../types';
-import * as svc from '../../services/placeService';
 import { onPlaceCreated, onPlaceUpdated, onPlaceDeleted } from '../../services/journeyService';
+import { checkPermission } from '../../services/permissions';
+import * as svc from '../../services/placeService';
+import type { User } from '../../types';
+import { broadcast } from '../../websocket';
+import { Injectable } from '@nestjs/common';
 
 type Trip = { user_id: number };
 
@@ -28,7 +28,7 @@ export class PlacesService {
     broadcast(tripId, event, payload, socketId);
   }
 
-  list(tripId: string, filters: { search?: string; category?: string; tag?: string }) {
+  list(tripId: string, filters: { search?: string; category?: string; category_ids?: number[]; tag?: string }) {
     return svc.listPlaces(tripId, filters);
   }
 
@@ -36,11 +36,11 @@ export class PlacesService {
     return svc.getPlace(tripId, id);
   }
 
-  create(tripId: string, data: Parameters<typeof svc.createPlace>[1]) {
+  create(tripId: string, data: svc.PlaceCreateInput) {
     return svc.createPlace(tripId, data);
   }
 
-  update(tripId: string, id: string, data: Parameters<typeof svc.updatePlace>[2], ifMatch?: string) {
+  update(tripId: string, id: string, data: svc.PlaceWriteInput, ifMatch?: string) {
     return svc.updatePlace(tripId, id, data, ifMatch);
   }
 
@@ -52,7 +52,7 @@ export class PlacesService {
     return svc.deletePlacesMany(tripId, ids);
   }
 
-  updateMany(tripId: string, ids: number[], data: Parameters<typeof svc.updatePlacesMany>[2]) {
+  updateMany(tripId: string, ids: number[], data: svc.PlaceWriteInput) {
     return svc.updatePlacesMany(tripId, ids, data);
   }
 
@@ -81,7 +81,25 @@ export class PlacesService {
   }
 
   // Journey hooks — non-fatal, mirroring the route's try/catch wrappers.
-  onCreated(tripId: string, placeId: number): void { try { onPlaceCreated(Number(tripId), placeId); } catch { /* non-fatal */ } }
-  onUpdated(placeId: number): void { try { onPlaceUpdated(placeId); } catch { /* non-fatal */ } }
-  onDeleted(placeId: number): void { try { onPlaceDeleted(placeId); } catch { /* non-fatal */ } }
+  onCreated(tripId: string, placeId: number): void {
+    try {
+      onPlaceCreated(Number(tripId), placeId);
+    } catch {
+      /* non-fatal */
+    }
+  }
+  onUpdated(placeId: number): void {
+    try {
+      onPlaceUpdated(placeId);
+    } catch {
+      /* non-fatal */
+    }
+  }
+  onDeleted(placeId: number): void {
+    try {
+      onPlaceDeleted(placeId);
+    } catch {
+      /* non-fatal */
+    }
+  }
 }

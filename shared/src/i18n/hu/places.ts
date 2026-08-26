@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Helyek gazdagítása a Google-lel',
   'places.enrichOnImportHint':
     'Minden importált helyet megkeres, hogy fotókat, címet és elérhetőséget adjon hozzá. Google Maps-kulcs szükséges.',
+  'places.formAdditionalCategories': 'További kategóriák',
+  'places.addAdditionalCategory': 'További kategória hozzáadása',
+  'places.removeAdditionalCategory': '{name} eltávolítása',
+  'places.primaryCategory': 'Elsődleges kategória',
 };
 export default places;

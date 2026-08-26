@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Enrich places via Google',
   'places.enrichOnImportHint':
     'Look up each imported place to fill in photos, address and contact details. Uses your Google Maps key.',
+  'places.formAdditionalCategories': 'Additional categories',
+  'places.addAdditionalCategory': 'Add another category',
+  'places.removeAdditionalCategory': 'Remove {name}',
+  'places.primaryCategory': 'Primary category',
 };
 export default places;

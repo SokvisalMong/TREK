@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Berika platser via Google',
   'places.enrichOnImportHint':
     'Sök upp varje importerad plats för att fylla i bilder, adress och kontaktuppgifter. Använder din Google Maps-nyckel.',
+  'places.formAdditionalCategories': 'Ytterligare kategorier',
+  'places.addAdditionalCategory': 'Lägg till en annan kategori',
+  'places.removeAdditionalCategory': 'Ta bort {name}',
+  'places.primaryCategory': 'Primär kategori',
 };
 export default places;

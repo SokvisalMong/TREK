@@ -1,23 +1,31 @@
 // FE-COMP-PLACEFORM-001 to FE-COMP-PLACEFORM-036
-import { render, screen, waitFor, fireEvent, within } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { buildAssignment, buildCategory, buildPlace, buildTrip, buildUser } from '../../../tests/helpers/factories';
 import { server } from '../../../tests/helpers/msw/server';
-import { useAuthStore } from '../../store/authStore';
-import { useTripStore } from '../../store/tripStore';
-import { usePermissionsStore } from '../../store/permissionsStore';
+import { fireEvent, render, screen, waitFor, within } from '../../../tests/helpers/render';
 import { resetAllStores, seedStore } from '../../../tests/helpers/store';
-import { buildUser, buildTrip, buildPlace, buildCategory, buildAssignment } from '../../../tests/helpers/factories';
+import { useAuthStore } from '../../store/authStore';
+import { usePermissionsStore } from '../../store/permissionsStore';
+import { useTripStore } from '../../store/tripStore';
 import PlaceFormModal from './PlaceFormModal';
 
 // Mock CustomTimePicker so we get a simple text input instead of the portal-heavy UI
 vi.mock('../shared/CustomTimePicker', () => ({
-  default: ({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) => (
+  default: ({
+    value,
+    onChange,
+    placeholder,
+  }: {
+    value: string;
+    onChange: (v: string) => void;
+    placeholder?: string;
+  }) => (
     <input
       data-testid="time-picker"
       type="text"
       value={value}
-      onChange={e => onChange(e.target.value)}
+      onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder ?? '00:00'}
     />
   ),
@@ -146,7 +154,7 @@ describe('PlaceFormModal', () => {
         {...defaultProps}
         place={null}
         prefillCoords={{ lat: 48.8566, lng: 2.3522, name: 'Paris', address: 'Paris, France' }}
-      />,
+      />
     );
     expect(screen.getByDisplayValue('48.8566')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Paris')).toBeInTheDocument();
@@ -169,8 +177,8 @@ describe('PlaceFormModal', () => {
       http.post('/api/maps/search', () =>
         HttpResponse.json({
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
-        }),
-      ),
+        })
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -191,8 +199,8 @@ describe('PlaceFormModal', () => {
       http.post('/api/maps/search', () =>
         HttpResponse.json({
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
-        }),
-      ),
+        })
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -209,8 +217,8 @@ describe('PlaceFormModal', () => {
       http.post('/api/maps/search', () =>
         HttpResponse.json({
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
-        }),
-      ),
+        })
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -234,7 +242,11 @@ describe('PlaceFormModal', () => {
     // the modal must show it instead of a generic "search failed" so the cause is visible.
     server.use(
       http.post('/api/maps/search', () =>
-        HttpResponse.json({ error: 'Places API (New) has not been used in project 123 or it is disabled' }, { status: 403 })),
+        HttpResponse.json(
+          { error: 'Places API (New) has not been used in project 123 or it is disabled' },
+          { status: 403 }
+        )
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -246,7 +258,7 @@ describe('PlaceFormModal', () => {
       expect(addToast).toHaveBeenCalledWith(
         expect.stringMatching(/Places API \(New\) has not been used/i),
         'error',
-        undefined,
+        undefined
       );
     });
 
@@ -275,7 +287,7 @@ describe('PlaceFormModal', () => {
         HttpResponse.json({
           suggestions: [{ placeId: 'node:123', mainText: 'Eiffel Tower', secondaryText: 'Paris, France' }],
           source: 'nominatim',
-        }),
+        })
       ),
       // details rejects (e.g. proxy 504 from a hung Overpass mirror)
       http.get('/api/maps/details/:placeId', () => HttpResponse.json({ error: 'boom' }, { status: 500 })),
@@ -283,8 +295,8 @@ describe('PlaceFormModal', () => {
         HttpResponse.json({
           places: [{ name: 'Eiffel Tower', address: 'Paris, France', lat: '48.8584', lng: '2.2945' }],
           source: 'openstreetmap',
-        }),
-      ),
+        })
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -305,15 +317,15 @@ describe('PlaceFormModal', () => {
         HttpResponse.json({
           suggestions: [{ placeId: 'node:123', mainText: 'Eiffel Tower', secondaryText: 'Paris, France' }],
           source: 'nominatim',
-        }),
+        })
       ),
       http.get('/api/maps/details/:placeId', () => HttpResponse.json({ place: null, disabled: true })),
       http.post('/api/maps/search', () =>
         HttpResponse.json({
           places: [{ name: 'Eiffel Tower', address: 'Paris, France', lat: '48.8584', lng: '2.2945' }],
           source: 'openstreetmap',
-        }),
-      ),
+        })
+      )
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -332,10 +344,10 @@ describe('PlaceFormModal', () => {
         HttpResponse.json({
           suggestions: [{ placeId: 'node:123', mainText: 'Eiffel Tower', secondaryText: 'Paris, France' }],
           source: 'nominatim',
-        }),
+        })
       ),
       http.get('/api/maps/details/:placeId', () => HttpResponse.json({ place: null, disabled: true })),
-      http.post('/api/maps/search', () => HttpResponse.json({ places: [], source: 'openstreetmap' })),
+      http.post('/api/maps/search', () => HttpResponse.json({ places: [], source: 'openstreetmap' }))
     );
 
     render(<PlaceFormModal {...defaultProps} />);
@@ -386,6 +398,81 @@ describe('PlaceFormModal', () => {
     expect(screen.getByText('Category')).toBeInTheDocument();
     // onCategoryCreated not called unless the new-category form is shown and submitted
     expect(onCategoryCreated).not.toHaveBeenCalled();
+  });
+
+  it('loads and submits existing additional categories while editing', async () => {
+    const user = userEvent.setup();
+    const primary = buildCategory({ name: 'Hotel' });
+    const cafe = buildCategory({ name: 'Cafe' });
+    const place = buildPlace({
+      name: 'Hotel cafe',
+      category_id: primary.id,
+      additional_category_ids: [cafe.id],
+      additional_categories: [cafe],
+    });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<PlaceFormModal {...defaultProps} place={place} categories={[primary, cafe]} onSave={onSave} />);
+
+    expect(screen.getByText('Cafe')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Update$/i }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category_id: primary.id,
+          additional_category_ids: [cafe.id],
+        })
+      )
+    );
+  });
+
+  it('removes an additional category when it becomes primary', async () => {
+    const user = userEvent.setup();
+    const hotel = buildCategory({ name: 'Hotel' });
+    const cafe = buildCategory({ name: 'Cafe' });
+    const place = buildPlace({
+      name: 'Hotel cafe',
+      category_id: hotel.id,
+      additional_category_ids: [cafe.id],
+      additional_categories: [cafe],
+    });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<PlaceFormModal {...defaultProps} place={place} categories={[hotel, cafe]} onSave={onSave} />);
+
+    await user.click(screen.getByRole('button', { name: /Hotel/i }));
+    await user.click(screen.getByRole('button', { name: 'Cafe' }));
+    await user.click(screen.getByRole('button', { name: /^Update$/i }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category_id: cafe.id,
+          additional_category_ids: [],
+        })
+      )
+    );
+  });
+  it('keeps the additional category menu open and toggles a selected category', async () => {
+    const user = userEvent.setup();
+    const hotel = buildCategory({ name: 'Hotel' });
+    const cafe = buildCategory({ name: 'Cafe' });
+    const nature = buildCategory({ name: 'Nature' });
+    const place = buildPlace({ name: 'Hotel cafe', category_id: hotel.id });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<PlaceFormModal {...defaultProps} place={place} categories={[hotel, cafe, nature]} onSave={onSave} />);
+
+    await user.click(screen.getByRole('button', { name: 'Add another category' }));
+    await user.click(screen.getByRole('button', { name: 'Cafe' }));
+    expect(screen.getByRole('button', { name: 'Nature' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cafe' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Cafe' }));
+    await user.click(screen.getByRole('button', { name: /^Update$/i }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          additional_category_ids: [],
+        })
+      )
+    );
   });
 
   // ── Time section (edit mode only) ────────────────────────────────────────────
@@ -451,7 +538,7 @@ describe('PlaceFormModal', () => {
         place={currentPlace}
         assignmentId={10}
         dayAssignments={[currentAssignment, otherAssignment]}
-      />,
+      />
     );
 
     // English translation: 'places.timeCollision' = 'Time overlap with:'

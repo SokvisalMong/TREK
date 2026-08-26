@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
+import { render, screen } from '../../../tests/helpers/render';
 import CustomSelect from './CustomSelect';
 
 const OPTIONS = [
@@ -50,7 +50,7 @@ describe('CustomSelect', () => {
     // Options in dropdown are also buttons
     const optionBtns = screen.getAllByRole('button');
     // Find the Cherry option button (not the trigger which shows placeholder)
-    const cherryBtn = optionBtns.find(b => b.textContent?.includes('Cherry'));
+    const cherryBtn = optionBtns.find((b) => b.textContent?.includes('Cherry'));
     await user.click(cherryBtn!);
     expect(onChange).toHaveBeenCalledWith('cherry');
   });
@@ -60,10 +60,42 @@ describe('CustomSelect', () => {
     render(<CustomSelect value="" onChange={onChange} options={OPTIONS} />);
     await user.click(screen.getByRole('button')); // open
     const optionBtns = screen.getAllByRole('button');
-    const appleBtn = optionBtns.find(b => b.textContent?.includes('Apple'));
+    const appleBtn = optionBtns.find((b) => b.textContent?.includes('Apple'));
     await user.click(appleBtn!);
     // After selection, only the trigger button remains in DOM
     expect(screen.getAllByRole('button')).toHaveLength(1);
+  });
+
+  it('FE-COMP-SELECT-009: keeps the dropdown open and toggles checked options', async () => {
+    const user = userEvent.setup();
+    let selected = false;
+    const handleChange = vi.fn((value: string | number) => {
+      if (value === 'banana') selected = !selected;
+    });
+    const options = OPTIONS.map((option) => ({
+      ...option,
+      isSelected: option.value === 'banana' && selected,
+    }));
+    const { rerender } = render(<CustomSelect value="" onChange={handleChange} options={options} keepOpenOnSelect />);
+
+    await user.click(screen.getByRole('button'));
+    const banana = () => screen.getAllByRole('button').find((button) => button.textContent?.includes('Banana'))!;
+    await user.click(banana());
+    expect(screen.getByText('Cherry')).toBeInTheDocument();
+    rerender(
+      <CustomSelect
+        value=""
+        onChange={handleChange}
+        options={OPTIONS.map((option) => ({
+          ...option,
+          isSelected: option.value === 'banana' && selected,
+        }))}
+        keepOpenOnSelect
+      />
+    );
+    expect(banana().querySelector('svg')).toBeInTheDocument();
+    await user.click(banana());
+    expect(handleChange).toHaveBeenCalledTimes(2);
   });
 
   it('FE-COMP-SELECT-007: searchable mode filters options by typed text', async () => {

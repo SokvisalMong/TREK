@@ -4,34 +4,33 @@
  * Uses fake-indexeddb so no real browser IDB is needed.
  * Each test gets a fresh database by using `use-fake-indexeddb` with Dexie.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import Dexie from 'dexie';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 // Re-import after fake-indexeddb is set up so Dexie picks up the shim.
 // We re-open a clean db in each test to isolate state.
 import {
-  offlineDb,
-  clearTripData,
   clearAll,
-  upsertTrip,
-  upsertDays,
-  upsertPlaces,
-  upsertPackingItems,
-  upsertTodoItems,
-  upsertBudgetItems,
-  upsertReservations,
-  upsertTripFiles,
-  upsertSyncMeta,
-  reopenForUser,
-  reopenAnonymous,
+  clearTripData,
   deleteCurrentUserDb,
   enforceBlobBudget,
+  offlineDb,
+  reopenAnonymous,
+  reopenForUser,
+  upsertBudgetItems,
+  upsertDays,
+  upsertPackingItems,
+  upsertPlaces,
+  upsertReservations,
+  upsertSyncMeta,
+  upsertTodoItems,
+  upsertTrip,
+  upsertTripFiles,
+  type BlobCacheEntry,
   type QueuedMutation,
   type SyncMeta,
-  type BlobCacheEntry,
 } from '../../../src/db/offlineDb';
-import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile } from '../../../src/types';
+import type { BudgetItem, Day, PackingItem, Place, Reservation, TodoItem, Trip, TripFile } from '../../../src/types';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +69,8 @@ const makePlace = (id: number, tripId = 1): Place => ({
   lng: 2.3522,
   address: null,
   category_id: null,
+  additional_category_ids: [],
+  additional_categories: [],
   price: null,
   currency: null,
   image_url: null,
@@ -131,8 +132,8 @@ describe('offlineDb — days', () => {
     await upsertDays([makeDay(1, 5), makeDay(2, 5), makeDay(3, 9)]);
     const trip5Days = await offlineDb.days.where('trip_id').equals(5).toArray();
     expect(trip5Days).toHaveLength(2);
-    expect(trip5Days.map(d => d.id)).toContain(1);
-    expect(trip5Days.map(d => d.id)).toContain(2);
+    expect(trip5Days.map((d) => d.id)).toContain(1);
+    expect(trip5Days.map((d) => d.id)).toContain(2);
   });
 });
 
@@ -146,15 +147,31 @@ describe('offlineDb — places', () => {
 
 describe('offlineDb — packing / todo / budget / reservations / files', () => {
   it('upserts packing items', async () => {
-    const item: PackingItem = { id: 1, trip_id: 1, name: 'Passport', category: null, checked: 0, sort_order: 0, quantity: 1 };
+    const item: PackingItem = {
+      id: 1,
+      trip_id: 1,
+      name: 'Passport',
+      category: null,
+      checked: 0,
+      sort_order: 0,
+      quantity: 1,
+    };
     await upsertPackingItems([item]);
     expect(await offlineDb.packingItems.count()).toBe(1);
   });
 
   it('upserts todo items', async () => {
     const item: TodoItem = {
-      id: 1, trip_id: 1, name: 'Book hotel', category: null, checked: 0,
-      sort_order: 0, due_date: null, description: null, assigned_user_id: null, priority: 0,
+      id: 1,
+      trip_id: 1,
+      name: 'Book hotel',
+      category: null,
+      checked: 0,
+      sort_order: 0,
+      due_date: null,
+      description: null,
+      assigned_user_id: null,
+      priority: 0,
     };
     await upsertTodoItems([item]);
     expect(await offlineDb.todoItems.count()).toBe(1);
@@ -162,8 +179,15 @@ describe('offlineDb — packing / todo / budget / reservations / files', () => {
 
   it('upserts budget items', async () => {
     const item: BudgetItem = {
-      id: 1, trip_id: 1, name: 'Flight', total_price: 500,
-      category: 'Transport', persons: 1, members: [], expense_date: null, sort_order: 0,
+      id: 1,
+      trip_id: 1,
+      name: 'Flight',
+      total_price: 500,
+      category: 'Transport',
+      persons: 1,
+      members: [],
+      expense_date: null,
+      sort_order: 0,
     };
     await upsertBudgetItems([item]);
     expect(await offlineDb.budgetItems.count()).toBe(1);
@@ -171,8 +195,15 @@ describe('offlineDb — packing / todo / budget / reservations / files', () => {
 
   it('upserts reservations', async () => {
     const item: Reservation = {
-      id: 1, trip_id: 1, title: 'Hotel', type: 'hotel', status: 'confirmed',
-      reservation_time: null, confirmation_number: null, notes: null, created_at: '2026-01-01T00:00:00Z',
+      id: 1,
+      trip_id: 1,
+      title: 'Hotel',
+      type: 'hotel',
+      status: 'confirmed',
+      reservation_time: null,
+      confirmation_number: null,
+      notes: null,
+      created_at: '2026-01-01T00:00:00Z',
     };
     await upsertReservations([item]);
     expect(await offlineDb.reservations.count()).toBe(1);
@@ -180,8 +211,13 @@ describe('offlineDb — packing / todo / budget / reservations / files', () => {
 
   it('upserts trip files', async () => {
     const file: TripFile = {
-      id: 1, trip_id: 1, filename: 'ticket.pdf', original_name: 'Ticket.pdf',
-      mime_type: 'application/pdf', url: '/api/trips/1/files/1/download', created_at: '2026-01-01T00:00:00Z',
+      id: 1,
+      trip_id: 1,
+      filename: 'ticket.pdf',
+      original_name: 'Ticket.pdf',
+      mime_type: 'application/pdf',
+      url: '/api/trips/1/files/1/download',
+      created_at: '2026-01-01T00:00:00Z',
     };
     await upsertTripFiles([file]);
     expect(await offlineDb.tripFiles.count()).toBe(1);
@@ -207,14 +243,26 @@ describe('offlineDb — syncMeta', () => {
 describe('offlineDb — mutationQueue', () => {
   it('stores queued mutations queryable by status', async () => {
     const pending: QueuedMutation = {
-      id: 'uuid-1', tripId: 1, method: 'POST', url: '/api/trips/1/places',
-      body: { name: 'Eiffel Tower' }, createdAt: Date.now(),
-      status: 'pending', attempts: 0, lastError: null,
+      id: 'uuid-1',
+      tripId: 1,
+      method: 'POST',
+      url: '/api/trips/1/places',
+      body: { name: 'Eiffel Tower' },
+      createdAt: Date.now(),
+      status: 'pending',
+      attempts: 0,
+      lastError: null,
     };
     const failed: QueuedMutation = {
-      id: 'uuid-2', tripId: 1, method: 'PUT', url: '/api/trips/1/places/5',
-      body: { name: 'Updated' }, createdAt: Date.now(),
-      status: 'failed', attempts: 3, lastError: 'Network error',
+      id: 'uuid-2',
+      tripId: 1,
+      method: 'PUT',
+      url: '/api/trips/1/places/5',
+      body: { name: 'Updated' },
+      createdAt: Date.now(),
+      status: 'failed',
+      attempts: 3,
+      lastError: 'Network error',
     };
     await offlineDb.mutationQueue.bulkPut([pending, failed]);
 
@@ -296,7 +344,15 @@ describe('offlineDb — clearTripData', () => {
     await upsertTrip(makeTrip(1));
     await upsertDays([makeDay(1, 1), makeDay(2, 1)]);
     await upsertPlaces([makePlace(10, 1)]);
-    const item: PackingItem = { id: 5, trip_id: 1, name: 'Towel', category: null, checked: 0, sort_order: 0, quantity: 1 };
+    const item: PackingItem = {
+      id: 5,
+      trip_id: 1,
+      name: 'Towel',
+      category: null,
+      checked: 0,
+      sort_order: 0,
+      quantity: 1,
+    };
     await upsertPackingItems([item]);
 
     await offlineDb.blobCache.put(makeBlob('/api/files/1/download', 1));
@@ -323,9 +379,45 @@ describe('offlineDb — clearTripData', () => {
   it('preserves unsynced (pending/conflict) writes but drops dead failed ones (#1135)', async () => {
     await upsertTrip(makeTrip(1));
     await offlineDb.mutationQueue.bulkPut([
-      { id: 'p1', tripId: 1, method: 'PUT', url: '/trips/1/places/10', body: { name: 'X' }, createdAt: 1, status: 'pending', attempts: 0, lastError: null, resource: 'places', entityId: 10 },
-      { id: 'c1', tripId: 1, method: 'PUT', url: '/trips/1/places/11', body: { name: 'Y' }, createdAt: 2, status: 'conflict', attempts: 1, lastError: 'conflict', resource: 'places', entityId: 11 },
-      { id: 'f1', tripId: 1, method: 'PUT', url: '/trips/1/places/12', body: { name: 'Z' }, createdAt: 3, status: 'failed', attempts: 1, lastError: 'boom', resource: 'places', entityId: 12 },
+      {
+        id: 'p1',
+        tripId: 1,
+        method: 'PUT',
+        url: '/trips/1/places/10',
+        body: { name: 'X' },
+        createdAt: 1,
+        status: 'pending',
+        attempts: 0,
+        lastError: null,
+        resource: 'places',
+        entityId: 10,
+      },
+      {
+        id: 'c1',
+        tripId: 1,
+        method: 'PUT',
+        url: '/trips/1/places/11',
+        body: { name: 'Y' },
+        createdAt: 2,
+        status: 'conflict',
+        attempts: 1,
+        lastError: 'conflict',
+        resource: 'places',
+        entityId: 11,
+      },
+      {
+        id: 'f1',
+        tripId: 1,
+        method: 'PUT',
+        url: '/trips/1/places/12',
+        body: { name: 'Z' },
+        createdAt: 3,
+        status: 'failed',
+        attempts: 1,
+        lastError: 'boom',
+        resource: 'places',
+        entityId: 12,
+      },
     ]);
 
     await clearTripData(1);
@@ -357,7 +449,7 @@ describe('offlineDb — per-user scoping (B4)', () => {
     await reopenAnonymous();
   });
 
-  it('isolates one user\'s cached data from another', async () => {
+  it("isolates one user's cached data from another", async () => {
     await reopenForUser(1);
     await upsertPlaces([makePlace(10, 1)]);
     expect(await offlineDb.places.count()).toBe(1);

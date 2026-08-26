@@ -89,5 +89,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Enriquir llocs mitjançant Google',
   'places.enrichOnImportHint':
     "Obté automàticament adreces, puntuacions i horaris d'obertura des de Google en importar.",
+  'places.formAdditionalCategories': 'Categories addicionals',
+  'places.addAdditionalCategory': 'Afegeix una altra categoria',
+  'places.removeAdditionalCategory': 'Elimina {name}',
+  'places.primaryCategory': 'Categoria principal',
 };
 export default places;

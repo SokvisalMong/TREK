@@ -87,5 +87,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Obohatit místa přes Google',
   'places.enrichOnImportHint':
     'Vyhledá každé importované místo a doplní fotky, adresu a kontakty. Vyžaduje klíč Google Maps.',
+  'places.formAdditionalCategories': 'Další kategorie',
+  'places.addAdditionalCategory': 'Přidat další kategorii',
+  'places.removeAdditionalCategory': 'Odebrat {name}',
+  'places.primaryCategory': 'Primární kategorie',
 };
 export default places;

@@ -4,6 +4,12 @@
  * visibility, the collection-scoped dedup, the fusion state machine and the
  * widened photo-cache reference check — is exercised faithfully.
  */
+import { runMigrations } from '../../../src/db/migrations';
+import { createTables } from '../../../src/db/schema';
+import * as svc from '../../../src/services/collectionsService';
+import { removeIfUnreferenced } from '../../../src/services/placePhotoCache';
+import { createUser, createTrip, createPlace, createCategory, createTag, addTripMember } from '../../helpers/factories';
+
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 
 const { testDb, dbMock, broadcastToUser } = vi.hoisted(() => {
@@ -39,14 +45,10 @@ vi.mock('../../../src/websocket', () => ({ broadcastToUser, broadcast: vi.fn() }
 const notifSend = vi.fn().mockResolvedValue(undefined);
 vi.mock('../../../src/services/notificationService', () => ({ send: notifSend }));
 
-import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
-import { createUser, createTrip, createPlace, createCategory, createTag, addTripMember } from '../../helpers/factories';
-import * as svc from '../../../src/services/collectionsService';
-import { removeIfUnreferenced } from '../../../src/services/placePhotoCache';
-
 function clearCollections() {
   testDb.exec(`
+    DELETE FROM collection_place_additional_categories;
+    DELETE FROM place_additional_categories;
     DELETE FROM collection_place_labels;
     DELETE FROM collection_labels;
     DELETE FROM collection_place_tags;
@@ -96,7 +98,11 @@ describe('collections CRUD + visibility', () => {
     const b = createUser(testDb).user;
     const col = svc.createCollection(a.id, { name: 'Private' });
     expect(() => svc.getCollection(b.id, col.id)).toThrow();
-    try { svc.getCollection(b.id, col.id); } catch (e) { expect((e as { status: number }).status).toBe(404); }
+    try {
+      svc.getCollection(b.id, col.id);
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(404);
+    }
   });
 
   it('COLLECTIONS-SVC-003: updateCollection renames; reorder only touches visible rows', () => {
@@ -108,8 +114,12 @@ describe('collections CRUD + visibility', () => {
     const b = createUser(testDb).user;
     const other = svc.createCollection(b.id, { name: 'B-list' }); // b's first list → sort_order 0
     svc.reorderCollections(a.id, [other.id, col.id]); // a cannot see other → skipped; col → index 1
-    const otherRow = testDb.prepare('SELECT sort_order FROM collections WHERE id = ?').get(other.id) as { sort_order: number };
-    const colRow = testDb.prepare('SELECT sort_order FROM collections WHERE id = ?').get(col.id) as { sort_order: number };
+    const otherRow = testDb.prepare('SELECT sort_order FROM collections WHERE id = ?').get(other.id) as {
+      sort_order: number;
+    };
+    const colRow = testDb.prepare('SELECT sort_order FROM collections WHERE id = ?').get(col.id) as {
+      sort_order: number;
+    };
     expect(otherRow.sort_order).toBe(0); // untouched — not visible to a
     expect(colRow.sort_order).toBe(1); // reordered to its index in the visible-filtered list
   });
@@ -122,11 +132,16 @@ describe('saved places + dedup', () => {
     const owner = createUser(testDb).user;
     const member = createUser(testDb).user;
     const col = svc.createCollection(owner.id, { name: 'Shared' });
-    testDb.prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')").run(col.id, member.id);
+    testDb
+      .prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')")
+      .run(col.id, member.id);
 
     const res = svc.savePlace(member.id, { collection_id: col.id, name: 'Senso-ji', lat: 35.71, lng: 139.79 });
     expect(res.place).toBeDefined();
-    const row = testDb.prepare('SELECT * FROM collection_places WHERE id = ?').get(res.place!.id) as Record<string, unknown>;
+    const row = testDb.prepare('SELECT * FROM collection_places WHERE id = ?').get(res.place!.id) as Record<
+      string,
+      unknown
+    >;
     expect(row.owner_id).toBe(owner.id);
     expect(row.saved_by).toBe(member.id);
     expect('reservation_status' in row).toBe(false);
@@ -144,7 +159,9 @@ describe('saved places + dedup', () => {
 
     const forced = svc.savePlace(u.id, { collection_id: col.id, name: 'eiffel tower', force: true });
     expect(forced.place).toBeDefined();
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({ n: 2 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 2,
+    });
   });
 
   it('COLLECTIONS-SVC-012: savePlace attaches tags', () => {
@@ -160,6 +177,24 @@ describe('saved places + dedup', () => {
     const b = createUser(testDb).user;
     const col = svc.createCollection(a.id, { name: 'Locked' });
     expect(() => svc.savePlace(b.id, { collection_id: col.id, name: 'X' })).toThrow();
+  });
+
+  it('stores a normalized primary and additional category set', () => {
+    const user = createUser(testDb).user;
+    const collection = svc.createCollection(user.id, { name: 'Categories' });
+    const primary = createCategory(testDb, { name: 'Hotel' });
+    const additional = createCategory(testDb, { name: 'Cafe' });
+
+    const result = svc.savePlace(user.id, {
+      collection_id: collection.id,
+      name: 'Hotel cafe',
+      category_id: primary.id,
+      additional_category_ids: [additional.id, additional.id, primary.id],
+    });
+    if (!result.place) throw new Error('Expected collection place creation to succeed');
+    expect(result.place.category_id).toBe(primary.id);
+    expect(result.place.additional_category_ids).toEqual([additional.id]);
+    expect(result.place.additional_categories.map(({ name }) => name)).toEqual(['Cafe']);
   });
 });
 
@@ -188,7 +223,33 @@ describe('saveFromTripPlace', () => {
     const col = svc.createCollection(stranger.id, { name: 'Mine' });
 
     expect(() => svc.saveFromTripPlace(stranger.id, col.id, trip.id, place.id)).toThrow();
-    try { svc.saveFromTripPlace(stranger.id, col.id, trip.id, place.id); } catch (e) { expect((e as { status: number }).status).toBe(404); }
+    try {
+      svc.saveFromTripPlace(stranger.id, col.id, trip.id, place.id);
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(404);
+    }
+  });
+
+  it('preserves additional categories when copying one or many trip places into a collection', () => {
+    const user = createUser(testDb).user;
+    const trip = createTrip(testDb, user.id);
+    const primary = createCategory(testDb, { name: 'Hotel' });
+    const additional = createCategory(testDb, { name: 'Cafe' });
+    const first = createPlace(testDb, trip.id, { name: 'First', category_id: primary.id });
+    const second = createPlace(testDb, trip.id, { name: 'Second', category_id: primary.id });
+    testDb
+      .prepare('INSERT INTO place_additional_categories (place_id, category_id) VALUES (?, ?), (?, ?)')
+      .run(first.id, additional.id, second.id, additional.id);
+    const collection = svc.createCollection(user.id, { name: 'Saved' });
+
+    const single = svc.saveFromTripPlace(user.id, collection.id, trip.id, first.id);
+    if (!single.place) throw new Error('Expected single copy to succeed');
+    expect(single.place.additional_category_ids).toEqual([additional.id]);
+
+    const bulk = svc.saveFromTripPlaces(user.id, collection.id, trip.id, [second.id], true);
+    expect(bulk.copied).toBe(1);
+    const copied = svc.getCollection(user.id, collection.id).places.find((place) => place.name === 'Second');
+    expect(copied?.additional_category_ids).toEqual([additional.id]);
   });
 });
 
@@ -210,7 +271,9 @@ describe('status + updatePlace move', () => {
     const targetOwner = createUser(testDb).user;
     const b = svc.createCollection(targetOwner.id, { name: 'B' });
     // owner is also an accepted member of b so the move target is visible to them
-    testDb.prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')").run(b.id, owner.id);
+    testDb
+      .prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')")
+      .run(b.id, owner.id);
 
     const p = svc.savePlace(owner.id, { collection_id: a.id, name: 'Movable' }).place!;
     const moved = svc.updatePlace(owner.id, p.id, { collection_id: b.id });
@@ -226,6 +289,31 @@ describe('status + updatePlace move', () => {
     const b = svc.createCollection(stranger.id, { name: 'B' });
     const p = svc.savePlace(owner.id, { collection_id: a.id, name: 'X' }).place!;
     expect(() => svc.updatePlace(owner.id, p.id, { collection_id: b.id })).toThrow();
+  });
+
+  it('preserves omitted additional categories, clears [], and removes a new primary collision', () => {
+    const user = createUser(testDb).user;
+    const collection = svc.createCollection(user.id, { name: 'Editable' });
+    const oldPrimary = createCategory(testDb, { name: 'Hotel' });
+    const newPrimary = createCategory(testDb, { name: 'Cafe' });
+    const retained = createCategory(testDb, { name: 'Nature' });
+    const saved = svc.savePlace(user.id, {
+      collection_id: collection.id,
+      name: 'Resort',
+      category_id: oldPrimary.id,
+      additional_category_ids: [newPrimary.id, retained.id],
+    }).place;
+    if (!saved) throw new Error('Expected collection place creation to succeed');
+
+    const preserved = svc.updatePlace(user.id, saved.id, { notes: 'legacy update' });
+    expect(preserved.additional_category_ids.sort()).toEqual([newPrimary.id, retained.id].sort());
+
+    const promoted = svc.updatePlace(user.id, saved.id, { category_id: newPrimary.id });
+    expect(promoted.additional_category_ids).toEqual([retained.id]);
+    expect(promoted.additional_category_ids).not.toContain(oldPrimary.id);
+
+    const cleared = svc.updatePlace(user.id, saved.id, { additional_category_ids: [] });
+    expect(cleared.additional_category_ids).toEqual([]);
   });
 });
 
@@ -248,7 +336,9 @@ describe('copyToTrip', () => {
     expect(res.copied).toBe(1);
     expect(res.skipped.map((s) => s.name)).toEqual(['Pantheon']);
 
-    const inserted = testDb.prepare("SELECT * FROM places WHERE trip_id = ? AND name = 'Colosseum'").get(trip.id) as Record<string, unknown>;
+    const inserted = testDb
+      .prepare("SELECT * FROM places WHERE trip_id = ? AND name = 'Colosseum'")
+      .get(trip.id) as Record<string, unknown>;
     expect(inserted.reservation_status).toBe('none'); // itinerary column took the table default
     expect(inserted.duration_minutes).toBe(60);
     const tagLink = testDb.prepare('SELECT COUNT(*) n FROM place_tags WHERE place_id = ?').get(inserted.id);
@@ -287,6 +377,29 @@ describe('copyToTrip', () => {
     const res = svc.copyToTrip(member.id, { trip_id: trip.id, place_ids: [p.id] });
     expect(res.copied).toBe(1);
   });
+
+  it('preserves additional categories when copying collection places into a trip', () => {
+    const user = createUser(testDb).user;
+    const trip = createTrip(testDb, user.id);
+    const primary = createCategory(testDb, { name: 'Hotel' });
+    const additional = createCategory(testDb, { name: 'Cafe' });
+    const collection = svc.createCollection(user.id, { name: 'Plan' });
+    const saved = svc.savePlace(user.id, {
+      collection_id: collection.id,
+      name: 'Hotel cafe',
+      category_id: primary.id,
+      additional_category_ids: [additional.id],
+    }).place;
+    if (!saved) throw new Error('Expected collection place creation to succeed');
+
+    expect(svc.copyToTrip(user.id, { trip_id: trip.id, place_ids: [saved.id] }).copied).toBe(1);
+    const copiedPlace = testDb
+      .prepare('SELECT id FROM places WHERE trip_id = ? AND name = ?')
+      .get(trip.id, saved.name) as { id: number };
+    expect(
+      testDb.prepare('SELECT category_id FROM place_additional_categories WHERE place_id = ?').all(copiedPlace.id),
+    ).toEqual([{ category_id: additional.id }]);
+  });
 });
 
 // ── delete + delete-many ─────────────────────────────────────────────────────
@@ -298,9 +411,13 @@ describe('delete places', () => {
     const p1 = svc.savePlace(u.id, { collection_id: col.id, name: 'A' }).place!;
     const p2 = svc.savePlace(u.id, { collection_id: col.id, name: 'B' }).place!;
     svc.deletePlace(u.id, p1.id);
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({ n: 1 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 1,
+    });
     expect(svc.deletePlacesMany(u.id, [p2.id])).toEqual([p2.id]);
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({ n: 0 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 0,
+    });
   });
 });
 
@@ -324,7 +441,11 @@ describe('fusion invitations', () => {
     expect(ok.error).toBeUndefined();
     expect(broadcastToUser).toHaveBeenCalledWith(target.id, expect.objectContaining({ type: 'collections:invite' }));
     // the notification send is fire-and-forget via a dynamic import — flush microtasks.
-    await vi.waitFor(() => expect(notifSend).toHaveBeenCalledWith(expect.objectContaining({ event: 'collection_invite', targetId: target.id })));
+    await vi.waitFor(() =>
+      expect(notifSend).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'collection_invite', targetId: target.id }),
+      ),
+    );
   });
 
   it('COLLECTIONS-SVC-031: double-invite while pending → 400; existing member → 400', () => {
@@ -354,7 +475,9 @@ describe('fusion invitations', () => {
     const { owner, target, col } = setup();
     svc.sendInvite(col.id, owner.id, owner.username, owner.email, target.id);
     svc.declineInvite(target.id, col.id, undefined);
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({ n: 0 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 0,
+    });
   });
 
   it('COLLECTIONS-SVC-035: cancelInvite is owner-only', () => {
@@ -362,7 +485,9 @@ describe('fusion invitations', () => {
     svc.sendInvite(col.id, owner.id, owner.username, owner.email, target.id);
     expect(() => svc.cancelInvite(col.id, target.id, target.id)).toThrow(); // non-owner
     svc.cancelInvite(col.id, owner.id, target.id); // owner ok
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({ n: 0 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 0,
+    });
   });
 
   it('COLLECTIONS-SVC-036: leaveCollection — member ok, owner blocked (400)', () => {
@@ -373,7 +498,11 @@ describe('fusion invitations', () => {
     expect(svc.listCollections(target.id).collections.map((c) => c.id)).not.toContain(col.id);
 
     expect(() => svc.leaveCollection(owner.id, col.id, undefined)).toThrow();
-    try { svc.leaveCollection(owner.id, col.id, undefined); } catch (e) { expect((e as { status: number }).status).toBe(400); }
+    try {
+      svc.leaveCollection(owner.id, col.id, undefined);
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(400);
+    }
   });
 
   it('COLLECTIONS-SVC-037: availableUsers is scoped to THIS collection only (no one-fusion bug)', () => {
@@ -434,11 +563,17 @@ describe('deleteCollection', () => {
     const targets = broadcastToUser.mock.calls.map((c) => c[0]);
     expect(targets).toEqual(expect.arrayContaining([accepted.id, pending.id]));
     expect(targets).not.toContain(owner.id);
-    expect(broadcastToUser.mock.calls.every((c) => (c[1] as { type: string }).type === 'collections:deleted')).toBe(true);
+    expect(broadcastToUser.mock.calls.every((c) => (c[1] as { type: string }).type === 'collections:deleted')).toBe(
+      true,
+    );
 
     expect(testDb.prepare('SELECT COUNT(*) n FROM collections WHERE id = ?').get(col.id)).toEqual({ n: 0 });
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({ n: 0 });
-    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({ n: 0 });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_places WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 0,
+    });
+    expect(testDb.prepare('SELECT COUNT(*) n FROM collection_members WHERE collection_id = ?').get(col.id)).toEqual({
+      n: 0,
+    });
   });
 });
 
@@ -449,12 +584,17 @@ describe('owner_id semantics', () => {
     const owner = createUser(testDb).user;
     const member = createUser(testDb).user;
     const col = svc.createCollection(owner.id, { name: 'Shared' });
-    testDb.prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')").run(col.id, member.id);
+    testDb
+      .prepare("INSERT INTO collection_members (collection_id, user_id, status) VALUES (?, ?, 'accepted')")
+      .run(col.id, member.id);
     const p = svc.savePlace(member.id, { collection_id: col.id, name: 'Kept' }).place!;
 
     testDb.prepare('DELETE FROM users WHERE id = ?').run(member.id);
 
-    const row = testDb.prepare('SELECT owner_id, saved_by FROM collection_places WHERE id = ?').get(p.id) as { owner_id: number; saved_by: number | null };
+    const row = testDb.prepare('SELECT owner_id, saved_by FROM collection_places WHERE id = ?').get(p.id) as {
+      owner_id: number;
+      saved_by: number | null;
+    };
     expect(row).toBeDefined();
     expect(row.owner_id).toBe(owner.id);
     expect(row.saved_by).toBeNull(); // ON DELETE SET NULL
@@ -468,7 +608,9 @@ describe('photo-cache widening', () => {
     const u = createUser(testDb).user;
     const col = svc.createCollection(u.id, { name: 'Photos' });
     // cache meta for place_id 'gp-x', referenced ONLY by a collection_places row.
-    testDb.prepare('INSERT INTO google_place_photo_meta (place_id, attribution, fetched_at) VALUES (?, ?, ?)').run('gp-x', null, Date.now());
+    testDb
+      .prepare('INSERT INTO google_place_photo_meta (place_id, attribution, fetched_at) VALUES (?, ?, ?)')
+      .run('gp-x', null, Date.now());
     svc.savePlace(u.id, { collection_id: col.id, name: 'Cached', google_place_id: 'gp-x' });
 
     removeIfUnreferenced('gp-x'); // would evict if isReferenced ignored collection_places
@@ -478,7 +620,9 @@ describe('photo-cache widening', () => {
   });
 
   it('COLLECTIONS-SVC-043: an unreferenced photo is still reclaimable', () => {
-    testDb.prepare('INSERT INTO google_place_photo_meta (place_id, attribution, fetched_at) VALUES (?, ?, ?)').run('gp-orphan', null, Date.now());
+    testDb
+      .prepare('INSERT INTO google_place_photo_meta (place_id, attribution, fetched_at) VALUES (?, ?, ?)')
+      .run('gp-orphan', null, Date.now());
     removeIfUnreferenced('gp-orphan');
     const meta = testDb.prepare('SELECT 1 FROM google_place_photo_meta WHERE place_id = ?').get('gp-orphan');
     expect(meta).toBeUndefined();
@@ -488,7 +632,9 @@ describe('photo-cache widening', () => {
 // ── Labels ───────────────────────────────────────────────────────────────────
 
 function addMember(colId: number, userId: number, role: 'viewer' | 'editor' | 'admin') {
-  testDb.prepare("INSERT INTO collection_members (collection_id, user_id, status, role) VALUES (?, ?, 'accepted', ?)").run(colId, userId, role);
+  testDb
+    .prepare("INSERT INTO collection_members (collection_id, user_id, status, role) VALUES (?, ?, 'accepted', ?)")
+    .run(colId, userId, role);
 }
 
 describe('collection labels', () => {
@@ -501,7 +647,11 @@ describe('collection labels', () => {
     expect(svc.getCollection(u.id, col.id).collection.labels).toHaveLength(1);
 
     expect(() => svc.createLabel(u.id, col.id, 'berlin')).toThrow(); // case-insensitive dup
-    try { svc.createLabel(u.id, col.id, 'berlin'); } catch (e) { expect((e as { status: number }).status).toBe(409); }
+    try {
+      svc.createLabel(u.id, col.id, 'berlin');
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(409);
+    }
   });
 
   it('COLLECTIONS-SVC-051: a viewer cannot manage labels (403); an editor can', () => {
@@ -509,7 +659,11 @@ describe('collection labels', () => {
     const viewer = createUser(testDb).user;
     const col = svc.createCollection(owner.id, { name: 'Trip' });
     addMember(col.id, viewer.id, 'viewer');
-    try { svc.createLabel(viewer.id, col.id, 'X'); } catch (e) { expect((e as { status: number }).status).toBe(403); }
+    try {
+      svc.createLabel(viewer.id, col.id, 'X');
+    } catch (e) {
+      expect((e as { status: number }).status).toBe(403);
+    }
 
     const editor = createUser(testDb).user;
     addMember(col.id, editor.id, 'editor');
@@ -524,7 +678,7 @@ describe('collection labels', () => {
     const foreign = svc.createLabel(u.id, other.id, 'Paris');
     const place = svc.savePlace(u.id, { collection_id: col.id, name: 'Gate' }).place!;
     svc.updatePlace(u.id, place.id, { label_ids: [l1.id, foreign.id] });
-    const stored = svc.getCollection(u.id, col.id).places.find(p => p.id === place.id)!;
+    const stored = svc.getCollection(u.id, col.id).places.find((p) => p.id === place.id)!;
     expect(stored.label_ids).toEqual([l1.id]);
   });
 
@@ -536,12 +690,12 @@ describe('collection labels', () => {
     const p2 = svc.savePlace(u.id, { collection_id: col.id, name: 'B' }).place!;
 
     expect(svc.assignLabels(u.id, [l.id], [p1.id, p2.id], false).changed).toBe(2);
-    expect(svc.getCollection(u.id, col.id).places.every(p => p.label_ids?.includes(l.id))).toBe(true);
+    expect(svc.getCollection(u.id, col.id).places.every((p) => p.label_ids?.includes(l.id))).toBe(true);
 
     svc.assignLabels(u.id, [l.id], [p1.id], true);
     const after = svc.getCollection(u.id, col.id).places;
-    expect(after.find(p => p.id === p1.id)!.label_ids).toEqual([]);
-    expect(after.find(p => p.id === p2.id)!.label_ids).toEqual([l.id]);
+    expect(after.find((p) => p.id === p1.id)!.label_ids).toEqual([]);
+    expect(after.find((p) => p.id === p2.id)!.label_ids).toEqual([l.id]);
   });
 
   it('COLLECTIONS-SVC-054: deleteLabel removes it and cascades its place assignments', () => {
@@ -553,7 +707,7 @@ describe('collection labels', () => {
 
     svc.deleteLabel(u.id, l.id);
     expect(svc.getCollection(u.id, col.id).collection.labels).toHaveLength(0);
-    expect(svc.getCollection(u.id, col.id).places.find(x => x.id === p.id)!.label_ids).toEqual([]);
+    expect(svc.getCollection(u.id, col.id).places.find((x) => x.id === p.id)!.label_ids).toEqual([]);
   });
 
   it('COLLECTIONS-SVC-055: moving a place to another list drops its labels', () => {
@@ -565,6 +719,6 @@ describe('collection labels', () => {
     svc.updatePlace(u.id, p.id, { label_ids: [l.id] });
 
     svc.updatePlace(u.id, p.id, { collection_id: b.id });
-    expect(svc.getCollection(u.id, b.id).places.find(x => x.id === p.id)!.label_ids).toEqual([]);
+    expect(svc.getCollection(u.id, b.id).places.find((x) => x.id === p.id)!.label_ids).toEqual([]);
   });
 });

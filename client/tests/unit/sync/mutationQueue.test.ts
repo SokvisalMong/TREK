@@ -4,15 +4,15 @@
  * Covers: enqueue, flush (2xx success, 4xx fail, network error), idempotency header,
  * pending count, create temp-id reconciliation, delete Dexie cleanup.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { server } from '../../helpers/msw/server';
 import { http, HttpResponse } from 'msw';
-import { setAuthed } from '../../../src/sync/authGate';
-import { mutationQueue, generateUUID, nextTempId } from '../../../src/sync/mutationQueue';
-import { offlineDb, clearAll } from '../../../src/db/offlineDb';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearAll, offlineDb } from '../../../src/db/offlineDb';
 import { placeRepo } from '../../../src/repo/placeRepo';
-import { buildPlace, buildPackingItem } from '../../helpers/factories';
+import { setAuthed } from '../../../src/sync/authGate';
+import { generateUUID, mutationQueue, nextTempId } from '../../../src/sync/mutationQueue';
+import { buildPlace } from '../../helpers/factories';
+import { server } from '../../helpers/msw/server';
 
 beforeEach(async () => {
   await clearAll();
@@ -68,9 +68,7 @@ describe('mutationQueue.flush — 2xx success', () => {
     const id = generateUUID();
     await mutationQueue.enqueue(makeMutation({ id }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.json({ place })),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.json({ place })));
 
     await mutationQueue.flush();
 
@@ -92,7 +90,7 @@ describe('mutationQueue.flush — 2xx success', () => {
       http.post('/api/trips/1/places', ({ request }) => {
         capturedKey = request.headers.get('X-Idempotency-Key');
         return HttpResponse.json({ place });
-      }),
+      })
     );
 
     await mutationQueue.flush();
@@ -109,9 +107,7 @@ describe('mutationQueue.flush — 2xx success', () => {
 
     await mutationQueue.enqueue(makeMutation({ id, tempId }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.json({ place })),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.json({ place })));
 
     await mutationQueue.flush();
 
@@ -134,14 +130,78 @@ describe('mutationQueue.flush — 2xx success', () => {
       entityId: 55,
     });
 
-    server.use(
-      http.delete('/api/trips/1/places/55', () => HttpResponse.json({ success: true })),
-    );
+    server.use(http.delete('/api/trips/1/places/55', () => HttpResponse.json({ success: true })));
 
     await mutationQueue.flush();
 
     expect(await offlineDb.mutationQueue.get(id)).toBeUndefined();
     expect(await offlineDb.places.get(55)).toBeUndefined();
+  });
+
+  it('replays an explicit empty additional-category set and caches the canonical response', async () => {
+    const existing = buildPlace({
+      trip_id: 1,
+      id: 77,
+      additional_category_ids: [5],
+      additional_categories: [{ id: 5, name: 'Cafe', color: '#f00', icon: 'coffee' }],
+    });
+    await offlineDb.places.put(existing);
+    const mutationId = generateUUID();
+    await mutationQueue.enqueue({
+      id: mutationId,
+      tripId: 1,
+      method: 'PUT',
+      url: '/trips/1/places/77',
+      body: { additional_category_ids: [] },
+      resource: 'places',
+      entityId: 77,
+    });
+    let replayedBody: unknown;
+    server.use(
+      http.put('/api/trips/1/places/77', async ({ request }) => {
+        replayedBody = await request.json();
+        return HttpResponse.json({
+          place: { ...existing, additional_category_ids: [], additional_categories: [] },
+        });
+      })
+    );
+
+    await mutationQueue.flush();
+
+    expect(replayedBody).toEqual({ additional_category_ids: [] });
+    expect((await offlineDb.places.get(77))?.additional_category_ids).toEqual([]);
+  });
+
+  it('does not synthesize additional_category_ids when an offline update omitted it', async () => {
+    const existing = buildPlace({
+      trip_id: 1,
+      id: 78,
+      additional_category_ids: [5],
+      additional_categories: [{ id: 5, name: 'Cafe', color: '#f00', icon: 'coffee' }],
+    });
+    await offlineDb.places.put(existing);
+    const mutationId = generateUUID();
+    await mutationQueue.enqueue({
+      id: mutationId,
+      tripId: 1,
+      method: 'PUT',
+      url: '/trips/1/places/78',
+      body: { notes: 'offline note' },
+      resource: 'places',
+      entityId: 78,
+    });
+    let replayedBody: unknown;
+    server.use(
+      http.put('/api/trips/1/places/78', async ({ request }) => {
+        replayedBody = await request.json();
+        return HttpResponse.json({ place: { ...existing, notes: 'offline note' } });
+      })
+    );
+
+    await mutationQueue.flush();
+
+    expect(replayedBody).toEqual({ notes: 'offline note' });
+    expect((await offlineDb.places.get(78))?.additional_category_ids).toEqual([5]);
   });
 });
 
@@ -165,7 +225,7 @@ describe('mutationQueue.flush — 4xx client error', () => {
           return HttpResponse.json({ error: 'Bad request' }, { status: 400 });
         }
         return HttpResponse.json({ place });
-      }),
+      })
     );
 
     await mutationQueue.flush();
@@ -184,9 +244,7 @@ describe('mutationQueue.flush — network error', () => {
     const id = generateUUID();
     await mutationQueue.enqueue(makeMutation({ id }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.error()),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.error()));
 
     await mutationQueue.flush();
 
@@ -210,7 +268,7 @@ describe('mutationQueue.flush — offline guard', () => {
       http.post('/api/trips/1/places', () => {
         called = true;
         return HttpResponse.json({ place: buildPlace({ trip_id: 1 }) });
-      }),
+      })
     );
 
     await mutationQueue.flush();
@@ -229,7 +287,7 @@ describe('mutationQueue.flush — offline guard', () => {
       http.post('/api/trips/1/places', () => {
         called = true;
         return HttpResponse.json({ place: buildPlace({ trip_id: 1 }) });
-      }),
+      })
     );
 
     await mutationQueue.flush();
@@ -321,7 +379,7 @@ describe('nextTempId (B2)', () => {
 
     const rows = await offlineDb.places.where('trip_id').equals(1).toArray();
     expect(rows).toHaveLength(2);
-    expect(rows.map(r => r.name).sort()).toEqual(['First', 'Second']);
+    expect(rows.map((r) => r.name).sort()).toEqual(['First', 'Second']);
   });
 });
 
@@ -337,24 +395,47 @@ describe('mutationQueue.flush — temp-id remapping (B1)', () => {
     const deleteId = generateUUID();
 
     await mutationQueue.enqueue({
-      id: createId, tripId: 1, method: 'POST', url: '/trips/1/places',
-      body: { name: 'Temp' }, resource: 'places', tempId,
+      id: createId,
+      tripId: 1,
+      method: 'POST',
+      url: '/trips/1/places',
+      body: { name: 'Temp' },
+      resource: 'places',
+      tempId,
     });
     await mutationQueue.enqueue({
-      id: putId, tripId: 1, method: 'PUT', url: '/trips/1/places/{id}',
-      body: { name: 'Edited' }, resource: 'places', entityId: tempId, tempEntityId: tempId,
+      id: putId,
+      tripId: 1,
+      method: 'PUT',
+      url: '/trips/1/places/{id}',
+      body: { name: 'Edited' },
+      resource: 'places',
+      entityId: tempId,
+      tempEntityId: tempId,
     });
     await mutationQueue.enqueue({
-      id: deleteId, tripId: 1, method: 'DELETE', url: '/trips/1/places/{id}',
-      body: undefined, resource: 'places', entityId: tempId, tempEntityId: tempId,
+      id: deleteId,
+      tripId: 1,
+      method: 'DELETE',
+      url: '/trips/1/places/{id}',
+      body: undefined,
+      resource: 'places',
+      entityId: tempId,
+      tempEntityId: tempId,
     });
 
     const putUrls: string[] = [];
     const deleteUrls: string[] = [];
     server.use(
       http.post('/api/trips/1/places', () => HttpResponse.json({ place: buildPlace({ trip_id: 1, id: 42 }) })),
-      http.put('/api/trips/1/places/:id', ({ params }) => { putUrls.push(String(params.id)); return HttpResponse.json({ place: buildPlace({ trip_id: 1, id: 42, name: 'Edited' }) }); }),
-      http.delete('/api/trips/1/places/:id', ({ params }) => { deleteUrls.push(String(params.id)); return HttpResponse.json({ success: true }); }),
+      http.put('/api/trips/1/places/:id', ({ params }) => {
+        putUrls.push(String(params.id));
+        return HttpResponse.json({ place: buildPlace({ trip_id: 1, id: 42, name: 'Edited' }) });
+      }),
+      http.delete('/api/trips/1/places/:id', ({ params }) => {
+        deleteUrls.push(String(params.id));
+        return HttpResponse.json({ success: true });
+      })
     );
 
     await mutationQueue.flush();
@@ -372,19 +453,33 @@ describe('mutationQueue.flush — temp-id remapping (B1)', () => {
     const createId = generateUUID();
     const putId = generateUUID();
     await mutationQueue.enqueue({
-      id: createId, tripId: 1, method: 'POST', url: '/trips/1/places',
-      body: { name: 'Temp' }, resource: 'places', tempId,
+      id: createId,
+      tripId: 1,
+      method: 'POST',
+      url: '/trips/1/places',
+      body: { name: 'Temp' },
+      resource: 'places',
+      tempId,
     });
     await mutationQueue.enqueue({
-      id: putId, tripId: 1, method: 'PUT', url: '/trips/1/places/{id}',
-      body: { name: 'Edited' }, resource: 'places', entityId: tempId, tempEntityId: tempId,
+      id: putId,
+      tripId: 1,
+      method: 'PUT',
+      url: '/trips/1/places/{id}',
+      body: { name: 'Edited' },
+      resource: 'places',
+      entityId: tempId,
+      tempEntityId: tempId,
     });
 
     // Only the CREATE succeeds this round; the PUT errors out (network) and stays queued.
     let putAttempts = 0;
     server.use(
       http.post('/api/trips/1/places', () => HttpResponse.json({ place: buildPlace({ trip_id: 1, id: 88 }) })),
-      http.put('/api/trips/1/places/:id', () => { putAttempts++; return HttpResponse.error(); }),
+      http.put('/api/trips/1/places/:id', () => {
+        putAttempts++;
+        return HttpResponse.error();
+      })
     );
 
     await mutationQueue.flush();
@@ -400,8 +495,14 @@ describe('mutationQueue.flush — temp-id remapping (B1)', () => {
   it('marks an orphaned dependent (placeholder never resolved) as failed', async () => {
     const putId = generateUUID();
     await mutationQueue.enqueue({
-      id: putId, tripId: 1, method: 'PUT', url: '/trips/1/places/{id}',
-      body: { name: 'Edited' }, resource: 'places', entityId: -999, tempEntityId: -999,
+      id: putId,
+      tripId: 1,
+      method: 'PUT',
+      url: '/trips/1/places/{id}',
+      body: { name: 'Edited' },
+      resource: 'places',
+      entityId: -999,
+      tempEntityId: -999,
     });
 
     await mutationQueue.flush();
@@ -421,9 +522,7 @@ describe('mutationQueue.flush — failure handling (B3)', () => {
     const id = generateUUID();
     await mutationQueue.enqueue(makeMutation({ id, tempId }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'Bad' }, { status: 400 })),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'Bad' }, { status: 400 })));
 
     await mutationQueue.flush();
 
@@ -436,9 +535,7 @@ describe('mutationQueue.flush — failure handling (B3)', () => {
     const id = generateUUID();
     await mutationQueue.enqueue(makeMutation({ id }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'slow down' }, { status: 429 })),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'slow down' }, { status: 429 })));
 
     await mutationQueue.flush();
 
@@ -452,9 +549,7 @@ describe('mutationQueue.flush — failure handling (B3)', () => {
     const id = generateUUID();
     await mutationQueue.enqueue(makeMutation({ id }));
 
-    server.use(
-      http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'AUTH_REQUIRED' }, { status: 401 })),
-    );
+    server.use(http.post('/api/trips/1/places', () => HttpResponse.json({ error: 'AUTH_REQUIRED' }, { status: 401 })));
 
     await mutationQueue.flush();
 

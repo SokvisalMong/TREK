@@ -5,21 +5,21 @@
  */
 
 import type {
-  User,
-  Trip,
-  Day,
-  Place,
+  AppConfig,
   Assignment,
+  BudgetItem,
+  Category,
+  Day,
   DayNote,
   PackingItem,
-  TodoItem,
-  BudgetItem,
+  Place,
   Reservation,
-  TripFile,
-  Tag,
-  Category,
   Settings,
-  AppConfig,
+  Tag,
+  TodoItem,
+  Trip,
+  TripFile,
+  User,
 } from '../../src/types';
 
 // ── Counters ──────────────────────────────────────────────────────────────────
@@ -106,6 +106,8 @@ export function buildPlace(overrides: Partial<Place> = {}): Place {
     lng: 2.3522,
     address: null,
     category_id: null,
+    additional_category_ids: [],
+    additional_categories: [],
     price: null,
     currency: null,
     image_url: null,

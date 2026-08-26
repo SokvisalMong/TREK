@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Обогатить места через Google',
   'places.enrichOnImportHint':
     'Находит каждое импортированное место и добавляет фото, адрес и контакты. Требуется ключ Google Maps.',
+  'places.formAdditionalCategories': 'Дополнительные категории',
+  'places.addAdditionalCategory': 'Добавить ещё категорию',
+  'places.removeAdditionalCategory': 'Удалить {name}',
+  'places.primaryCategory': 'Основная категория',
 };
 export default places;

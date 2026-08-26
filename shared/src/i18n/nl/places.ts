@@ -88,5 +88,9 @@ const places: TranslationStrings = {
   'places.enrichOnImport': 'Plaatsen verrijken via Google',
   'places.enrichOnImportHint':
     'Zoekt elke geïmporteerde plaats op om fotos, adres en contactgegevens toe te voegen. Gebruikt je Google Maps-sleutel.',
+  'places.formAdditionalCategories': 'Extra categorieën',
+  'places.addAdditionalCategory': 'Nog een categorie toevoegen',
+  'places.removeAdditionalCategory': '{name} verwijderen',
+  'places.primaryCategory': 'Primaire categorie',
 };
 export default places;

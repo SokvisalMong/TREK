@@ -1,9 +1,13 @@
-import { XMLParser, XMLValidator } from 'fast-xml-parser';
-import unzipper from 'unzipper';
-import { db, getPlaceWithTags } from '../db/database';
-import { loadTagsByPlaceIds } from './queryHelpers';
-import { checkSsrf, safeFetchFollow, SsrfBlockedError } from '../utils/ssrfGuard';
+import { db, getPlaceWithTags, type HydratedPlace } from '../db/database';
+import {
+  loadAdditionalCategoriesByPlaceIds,
+  normalizePlaceCategoryWrite,
+  PlaceCategoryValidationError,
+  replacePlaceAdditionalCategories,
+} from '../db/placeCategories';
 import { Place } from '../types';
+import { checkSsrf, safeFetchFollow, SsrfBlockedError } from '../utils/ssrfGuard';
+import { type UpdateConflict, isUpdateConflict } from './conflictResult';
 import {
   buildCategoryNameLookup,
   createKmlImportSummary,
@@ -15,8 +19,11 @@ import {
 } from './kmlImport';
 import { enrichImportedPlaces, type EnrichablePlace } from './placeEnrichment';
 import * as placePhotoCache from './placePhotoCache';
+import { loadTagsByPlaceIds } from './queryHelpers';
 import { searchUnsplashPhotos, getUnsplashKey } from './unsplashService';
-import { type UpdateConflict, isUpdateConflict } from './conflictResult';
+
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import unzipper from 'unzipper';
 
 // Reclaim a deleted place's cached marker photo if nothing else references it.
 // The cache key is the Google place_id, or — for coordinate-only places — the
@@ -25,9 +32,19 @@ function reclaimPhotoCache(googlePlaceId: string | null, imageUrl: string | null
   const candidates = new Set<string>();
   if (googlePlaceId) candidates.add(googlePlaceId);
   const m = imageUrl?.match(/^\/api\/maps\/place-photo\/(.+)\/bytes$/);
-  if (m) { try { candidates.add(decodeURIComponent(m[1])); } catch { /* malformed url */ } }
+  if (m) {
+    try {
+      candidates.add(decodeURIComponent(m[1]));
+    } catch {
+      /* malformed url */
+    }
+  }
   for (const id of candidates) {
-    try { placePhotoCache.removeIfUnreferenced(id); } catch { /* best-effort */ }
+    try {
+      placePhotoCache.removeIfUnreferenced(id);
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
@@ -36,6 +53,34 @@ export interface ListImportOptions {
   enrich?: boolean;
   userId?: number;
   lang?: string;
+}
+
+export interface PlaceWriteInput {
+  name?: string;
+  description?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  address?: string | null;
+  category_id?: number | null;
+  additional_category_ids?: number[];
+  price?: number | null;
+  currency?: string | null;
+  place_time?: string | null;
+  end_time?: string | null;
+  duration_minutes?: number | null;
+  notes?: string | null;
+  image_url?: string | null;
+  google_place_id?: string | null;
+  google_ftid?: string | null;
+  osm_id?: string | null;
+  website?: string | null;
+  phone?: string | null;
+  transport_mode?: string | null;
+  tags?: number[];
+}
+
+export interface PlaceCreateInput extends PlaceWriteInput {
+  name: string;
 }
 
 interface PlaceWithCategory extends Place {
@@ -56,7 +101,13 @@ export interface PlaceImportResult {
 
 export function listPlaces(
   tripId: string,
-  filters: { search?: string; category?: string; tag?: string; assignment?: 'all' | 'unassigned' | 'assigned' },
+  filters: {
+    search?: string;
+    category?: string;
+    category_ids?: number[];
+    tag?: string;
+    assignment?: 'all' | 'unassigned' | 'assigned';
+  },
 ) {
   let query = `
     SELECT DISTINCT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon
@@ -72,9 +123,50 @@ export function listPlaces(
     params.push(searchParam, searchParam, searchParam);
   }
 
+  const requestedCategoryIds: number[] = [];
+  let includeUncategorized = false;
   if (filters.category) {
-    query += ' AND p.category_id = ?';
-    params.push(filters.category);
+    if (filters.category === 'uncategorized') {
+      includeUncategorized = true;
+    } else {
+      const categoryId = Number(filters.category);
+      if (!Number.isInteger(categoryId) || categoryId <= 0) {
+        throw new PlaceCategoryValidationError('category must be a positive integer or "uncategorized"');
+      }
+      requestedCategoryIds.push(categoryId);
+    }
+  }
+  for (const categoryId of filters.category_ids ?? []) {
+    if (!Number.isInteger(categoryId) || categoryId <= 0) {
+      throw new PlaceCategoryValidationError('category_ids must contain positive integers');
+    }
+    requestedCategoryIds.push(categoryId);
+  }
+
+  const categoryIds = [...new Set(requestedCategoryIds)];
+  if (categoryIds.length > 0 || includeUncategorized) {
+    const categoryClauses: string[] = [];
+    if (categoryIds.length > 0) {
+      const placeholders = categoryIds.map(() => '?').join(',');
+      categoryClauses.push(
+        `(p.category_id IN (${placeholders})
+          OR EXISTS (
+            SELECT 1 FROM place_additional_categories pac
+            WHERE pac.place_id = p.id AND pac.category_id IN (${placeholders})
+          ))`,
+      );
+      params.push(...categoryIds, ...categoryIds);
+    }
+    if (includeUncategorized) {
+      categoryClauses.push(
+        `(p.category_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM place_additional_categories pac_uncategorized
+            WHERE pac_uncategorized.place_id = p.id
+          ))`,
+      );
+    }
+    query += ` AND (${categoryClauses.join(' OR ')})`;
   }
 
   if (filters.tag) {
@@ -93,66 +185,101 @@ export function listPlaces(
   query += ' ORDER BY p.created_at DESC';
 
   const places = db.prepare(query).all(...params) as PlaceWithCategory[];
-
-  const placeIds = places.map(p => p.id);
+  const placeIds = places.map(({ id }) => id);
   const tagsByPlaceId = loadTagsByPlaceIds(placeIds);
+  const additionalCategoriesByPlaceId = loadAdditionalCategoriesByPlaceIds(db, placeIds);
 
-  return places.map(p => ({
-    ...p,
-    category: p.category_id ? {
-      id: p.category_id,
-      name: p.category_name,
-      color: p.category_color,
-      icon: p.category_icon,
-    } : null,
-    tags: tagsByPlaceId[p.id] || [],
-  }));
+  return places.map((place) => {
+    const additionalCategories = additionalCategoriesByPlaceId[place.id];
+    return {
+      ...place,
+      category:
+        place.category_id != null
+          ? {
+              id: place.category_id,
+              name: place.category_name,
+              color: place.category_color,
+              icon: place.category_icon,
+            }
+          : null,
+      additional_category_ids: additionalCategories.map(({ id }) => id),
+      additional_categories: additionalCategories,
+      tags: tagsByPlaceId[place.id] || [],
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
 // Create place
 // ---------------------------------------------------------------------------
 
-export function createPlace(
-  tripId: string,
-  body: {
-    name: string; description?: string; lat?: number; lng?: number; address?: string;
-    category_id?: number; price?: number; currency?: string;
-    place_time?: string; end_time?: string;
-    duration_minutes?: number; notes?: string; image_url?: string;
-    google_place_id?: string; google_ftid?: string; osm_id?: string; website?: string; phone?: string;
-    transport_mode?: string; tags?: number[];
-  },
-) {
-  const {
-    name, description, lat, lng, address, category_id, price, currency,
-    place_time, end_time,
-    duration_minutes, notes, image_url, google_place_id, google_ftid, osm_id, website, phone,
-    transport_mode, tags = [],
-  } = body;
+export function createPlace(tripId: string, body: PlaceCreateInput) {
+  const run = db.transaction(() => {
+    const categoryWrite = normalizePlaceCategoryWrite(db, body);
+    const {
+      name,
+      description,
+      lat,
+      lng,
+      address,
+      price,
+      currency,
+      place_time,
+      end_time,
+      duration_minutes,
+      notes,
+      image_url,
+      google_place_id,
+      google_ftid,
+      osm_id,
+      website,
+      phone,
+      transport_mode,
+      tags = [],
+    } = body;
 
-  const result = db.prepare(`
-    INSERT INTO places (trip_id, name, description, lat, lng, address, category_id, price, currency,
-      place_time, end_time,
-      duration_minutes, notes, image_url, google_place_id, google_ftid, osm_id, website, phone, transport_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    tripId, name, description || null, lat || null, lng || null, address || null,
-    category_id || null, price || null, currency || null,
-    place_time || null, end_time || null, duration_minutes || 60, notes || null, image_url || null,
-    google_place_id || null, google_ftid || null, osm_id || null, website || null, phone || null, transport_mode || 'walking',
-  );
+    const result = db
+      .prepare(
+        `INSERT INTO places (
+          trip_id, name, description, lat, lng, address, category_id, price, currency,
+          place_time, end_time, duration_minutes, notes, image_url, google_place_id,
+          google_ftid, osm_id, website, phone, transport_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        tripId,
+        name,
+        description || null,
+        lat || null,
+        lng || null,
+        address || null,
+        categoryWrite.categoryId,
+        price || null,
+        currency || null,
+        place_time || null,
+        end_time || null,
+        duration_minutes || 60,
+        notes || null,
+        image_url || null,
+        google_place_id || null,
+        google_ftid || null,
+        osm_id || null,
+        website || null,
+        phone || null,
+        transport_mode || 'walking',
+      );
 
-  const placeId = result.lastInsertRowid;
+    const placeId = result.lastInsertRowid;
+    replacePlaceAdditionalCategories(db, placeId, categoryWrite.additionalCategoryIds ?? []);
 
-  if (tags && tags.length > 0) {
-    const insertTag = db.prepare('INSERT OR IGNORE INTO place_tags (place_id, tag_id) VALUES (?, ?)');
-    for (const tagId of tags) {
-      insertTag.run(placeId, tagId);
+    if (tags.length > 0) {
+      const insertTag = db.prepare('INSERT OR IGNORE INTO place_tags (place_id, tag_id) VALUES (?, ?)');
+      for (const tagId of tags) insertTag.run(placeId, tagId);
     }
-  }
+    return Number(placeId);
+  });
 
-  return getPlaceWithTags(Number(placeId));
+  return getPlaceWithTags(run());
 }
 
 // ---------------------------------------------------------------------------
@@ -172,17 +299,12 @@ export function getPlace(tripId: string, placeId: string) {
 export function updatePlace(
   tripId: string,
   placeId: string,
-  body: {
-    name?: string; description?: string; lat?: number; lng?: number; address?: string;
-    category_id?: number; price?: number; currency?: string;
-    place_time?: string; end_time?: string;
-    duration_minutes?: number; notes?: string; image_url?: string;
-    google_place_id?: string; google_ftid?: string; osm_id?: string; website?: string; phone?: string;
-    transport_mode?: string; tags?: number[];
-  },
+  body: PlaceWriteInput,
   ifMatch?: string,
-): ReturnType<typeof getPlaceWithTags> | UpdateConflict | null {
-  const existingPlace = db.prepare('SELECT * FROM places WHERE id = ? AND trip_id = ?').get(placeId, tripId) as Place | undefined;
+): HydratedPlace | UpdateConflict | null {
+  const existingPlace = db.prepare('SELECT * FROM places WHERE id = ? AND trip_id = ?').get(placeId, tripId) as
+    | Place
+    | undefined;
   if (!existingPlace) return null;
 
   // Optimistic concurrency (#1135): when the caller sent the version it based its
@@ -192,69 +314,95 @@ export function updatePlace(
     return { conflict: true, server: getPlaceWithTags(placeId) };
   }
 
-  const {
-    name, description, lat, lng, address, category_id, price, currency,
-    place_time, end_time,
-    duration_minutes, notes, image_url, google_place_id, google_ftid, osm_id, website, phone,
-    transport_mode, tags,
-  } = body;
+  const run = db.transaction(() => {
+    const categoryWrite = normalizePlaceCategoryWrite(db, body, existingPlace.category_id ?? null);
+    const {
+      name,
+      description,
+      lat,
+      lng,
+      address,
+      price,
+      currency,
+      place_time,
+      end_time,
+      duration_minutes,
+      notes,
+      image_url,
+      google_place_id,
+      google_ftid,
+      osm_id,
+      website,
+      phone,
+      transport_mode,
+      tags,
+    } = body;
 
-  db.prepare(`
-    UPDATE places SET
-      name = COALESCE(?, name),
-      description = ?,
-      lat = ?,
-      lng = ?,
-      address = ?,
-      category_id = ?,
-      price = ?,
-      currency = COALESCE(?, currency),
-      place_time = ?,
-      end_time = ?,
-      duration_minutes = COALESCE(?, duration_minutes),
-      notes = ?,
-      image_url = ?,
-      google_place_id = ?,
-      google_ftid = ?,
-      osm_id = ?,
-      website = ?,
-      phone = ?,
-      transport_mode = COALESCE(?, transport_mode),
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    name || null,
-    description !== undefined ? description : existingPlace.description,
-    lat !== undefined ? lat : existingPlace.lat,
-    lng !== undefined ? lng : existingPlace.lng,
-    address !== undefined ? address : existingPlace.address,
-    category_id !== undefined ? category_id : existingPlace.category_id,
-    price !== undefined ? price : existingPlace.price,
-    currency || null,
-    place_time !== undefined ? place_time : existingPlace.place_time,
-    end_time !== undefined ? end_time : existingPlace.end_time,
-    duration_minutes || null,
-    notes !== undefined ? notes : existingPlace.notes,
-    image_url !== undefined ? image_url : existingPlace.image_url,
-    google_place_id !== undefined ? google_place_id : existingPlace.google_place_id,
-    google_ftid !== undefined ? google_ftid : existingPlace.google_ftid,
-    osm_id !== undefined ? osm_id : existingPlace.osm_id,
-    website !== undefined ? website : existingPlace.website,
-    phone !== undefined ? phone : existingPlace.phone,
-    transport_mode || null,
-    placeId,
-  );
+    db.prepare(
+      `UPDATE places SET
+        name = COALESCE(?, name),
+        description = ?,
+        lat = ?,
+        lng = ?,
+        address = ?,
+        category_id = ?,
+        price = ?,
+        currency = COALESCE(?, currency),
+        place_time = ?,
+        end_time = ?,
+        duration_minutes = COALESCE(?, duration_minutes),
+        notes = ?,
+        image_url = ?,
+        google_place_id = ?,
+        google_ftid = ?,
+        osm_id = ?,
+        website = ?,
+        phone = ?,
+        transport_mode = COALESCE(?, transport_mode),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?`,
+    ).run(
+      name || null,
+      description !== undefined ? description : existingPlace.description,
+      lat !== undefined ? lat : existingPlace.lat,
+      lng !== undefined ? lng : existingPlace.lng,
+      address !== undefined ? address : existingPlace.address,
+      categoryWrite.categoryId,
+      price !== undefined ? price : existingPlace.price,
+      currency || null,
+      place_time !== undefined ? place_time : existingPlace.place_time,
+      end_time !== undefined ? end_time : existingPlace.end_time,
+      duration_minutes || null,
+      notes !== undefined ? notes : existingPlace.notes,
+      image_url !== undefined ? image_url : existingPlace.image_url,
+      google_place_id !== undefined ? google_place_id : existingPlace.google_place_id,
+      google_ftid !== undefined ? google_ftid : existingPlace.google_ftid,
+      osm_id !== undefined ? osm_id : existingPlace.osm_id,
+      website !== undefined ? website : existingPlace.website,
+      phone !== undefined ? phone : existingPlace.phone,
+      transport_mode || null,
+      placeId,
+    );
 
-  if (tags !== undefined) {
-    db.prepare('DELETE FROM place_tags WHERE place_id = ?').run(placeId);
-    if (tags.length > 0) {
-      const insertTag = db.prepare('INSERT OR IGNORE INTO place_tags (place_id, tag_id) VALUES (?, ?)');
-      for (const tagId of tags) {
-        insertTag.run(placeId, tagId);
+    if (categoryWrite.additionalCategoryIdsProvided) {
+      replacePlaceAdditionalCategories(db, placeId, categoryWrite.additionalCategoryIds ?? []);
+    } else if (categoryWrite.categoryIdProvided && categoryWrite.categoryId !== null) {
+      db.prepare('DELETE FROM place_additional_categories WHERE place_id = ? AND category_id = ?').run(
+        placeId,
+        categoryWrite.categoryId,
+      );
+    }
+
+    if (tags !== undefined) {
+      db.prepare('DELETE FROM place_tags WHERE place_id = ?').run(placeId);
+      if (tags.length > 0) {
+        const insertTag = db.prepare('INSERT OR IGNORE INTO place_tags (place_id, tag_id) VALUES (?, ?)');
+        for (const tagId of tags) insertTag.run(placeId, tagId);
       }
     }
-  }
+  });
 
+  run();
   return getPlaceWithTags(placeId);
 }
 
@@ -263,9 +411,9 @@ export function updatePlace(
 // ---------------------------------------------------------------------------
 
 export function deletePlace(tripId: string, placeId: string): boolean {
-  const place = db.prepare(
-    'SELECT google_place_id, image_url FROM places WHERE id = ? AND trip_id = ?'
-  ).get(placeId, tripId) as { google_place_id: string | null; image_url: string | null } | undefined;
+  const place = db
+    .prepare('SELECT google_place_id, image_url FROM places WHERE id = ? AND trip_id = ?')
+    .get(placeId, tripId) as { google_place_id: string | null; image_url: string | null } | undefined;
   if (!place) return false;
   db.prepare('DELETE FROM places WHERE id = ?').run(placeId);
   reclaimPhotoCache(place.google_place_id, place.image_url);
@@ -280,7 +428,9 @@ export function deletePlacesMany(tripId: string, ids: number[]): number[] {
   const reclaimable: { google_place_id: string | null; image_url: string | null }[] = [];
   const run = db.transaction((list: number[]) => {
     for (const id of list) {
-      const row = selectStmt.get(id, tripId) as { google_place_id: string | null; image_url: string | null } | undefined;
+      const row = selectStmt.get(id, tripId) as
+        | { google_place_id: string | null; image_url: string | null }
+        | undefined;
       if (!row) continue;
       deleteStmt.run(id);
       deleted.push(id);
@@ -303,13 +453,9 @@ export function deletePlacesMany(tripId: string, ids: number[]): number[] {
  * fields change and everything else is preserved. IDs that don't belong to the
  * trip are skipped. Returns the updated places.
  */
-export function updatePlacesMany(
-  tripId: string,
-  ids: number[],
-  body: Parameters<typeof updatePlace>[2],
-): NonNullable<ReturnType<typeof getPlaceWithTags>>[] {
+export function updatePlacesMany(tripId: string, ids: number[], body: PlaceWriteInput): HydratedPlace[] {
   if (ids.length === 0) return [];
-  const updated: NonNullable<ReturnType<typeof getPlaceWithTags>>[] = [];
+  const updated: HydratedPlace[] = [];
   const run = db.transaction((list: number[]) => {
     for (const id of list) {
       // Bulk update sends no If-Match, so updatePlace never returns a conflict
@@ -429,7 +575,10 @@ export function importGpx(tripId: string, fileBuffer: Buffer, opts: GpxImportOpt
   if (!gpx) return null;
 
   const str = (v: unknown) => (v != null ? String(v).trim() : null);
-  const num = (v: unknown) => { const n = parseFloat(String(v)); return isNaN(n) ? null : n; };
+  const num = (v: unknown) => {
+    const n = parseFloat(String(v));
+    return isNaN(n) ? null : n;
+  };
 
   // Routes and tracks rarely carry their own <name>. Without one they all fall back to the
   // same generic label, so name-based dedup drops every import after the first. Derive a
@@ -454,7 +603,12 @@ export function importGpx(tripId: string, fileBuffer: Buffer, opts: GpxImportOpt
       const lat = num(wpt['@_lat']);
       const lng = num(wpt['@_lon']);
       if (lat === null || lng === null) continue;
-      waypoints.push({ lat, lng, name: str(wpt.name) || `Waypoint ${waypoints.length + 1}`, description: str(wpt.desc) });
+      waypoints.push({
+        lat,
+        lng,
+        name: str(wpt.name) || `Waypoint ${waypoints.length + 1}`,
+        description: str(wpt.desc),
+      });
     }
   }
 
@@ -463,11 +617,19 @@ export function importGpx(tripId: string, fileBuffer: Buffer, opts: GpxImportOpt
     for (const rte of gpx.rte ?? []) {
       const pts = (rte.rtept ?? [])
         .map((pt: Record<string, unknown>) => ({ lat: num(pt['@_lat']), lng: num(pt['@_lon']), ele: num(pt['ele']) }))
-        .filter((p: { lat: number | null; lng: number | null; ele: number | null }) => p.lat !== null && p.lng !== null) as Array<{ lat: number; lng: number; ele: number | null }>;
+        .filter(
+          (p: { lat: number | null; lng: number | null; ele: number | null }) => p.lat !== null && p.lng !== null,
+        ) as Array<{ lat: number; lng: number; ele: number | null }>;
       if (pts.length === 0) continue;
-      const hasAllEle = pts.every(p => p.ele !== null);
-      const routeGeometry = pts.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]);
-      waypoints.push({ lat: pts[0].lat, lng: pts[0].lng, name: geoName(str(rte.name), 'GPX Route'), description: str(rte.desc), routeGeometry: JSON.stringify(routeGeometry) });
+      const hasAllEle = pts.every((p) => p.ele !== null);
+      const routeGeometry = pts.map((p) => (hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]));
+      waypoints.push({
+        lat: pts[0].lat,
+        lng: pts[0].lng,
+        name: geoName(str(rte.name), 'GPX Route'),
+        description: str(rte.desc),
+        routeGeometry: JSON.stringify(routeGeometry),
+      });
     }
   }
 
@@ -485,9 +647,15 @@ export function importGpx(tripId: string, fileBuffer: Buffer, opts: GpxImportOpt
       }
       if (trackPoints.length === 0) continue;
       const start = trackPoints[0];
-      const hasAllEle = trackPoints.every(p => p.ele !== null);
-      const routeGeometry = trackPoints.map(p => hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]);
-      waypoints.push({ lat: start.lat, lng: start.lng, name: geoName(str(trk.name), 'GPX Track'), description: str(trk.desc), routeGeometry: JSON.stringify(routeGeometry) });
+      const hasAllEle = trackPoints.every((p) => p.ele !== null);
+      const routeGeometry = trackPoints.map((p) => (hasAllEle ? [p.lat, p.lng, p.ele] : [p.lat, p.lng]));
+      waypoints.push({
+        lat: start.lat,
+        lng: start.lng,
+        name: geoName(str(trk.name), 'GPX Track'),
+        description: str(trk.desc),
+        routeGeometry: JSON.stringify(routeGeometry),
+      });
     }
   }
 
@@ -631,7 +799,9 @@ export async function unpackKmzToKml(
     throw new Error('Invalid KMZ archive.');
   }
 
-  const kmlEntries = zip.files.filter((entry) => !entry.path.endsWith('/') && entry.path.toLowerCase().endsWith('.kml'));
+  const kmlEntries = zip.files.filter(
+    (entry) => !entry.path.endsWith('/') && entry.path.toLowerCase().endsWith('.kml'),
+  );
   if (kmlEntries.length === 0) {
     throw new Error('KMZ archive does not contain a KML file.');
   }
@@ -645,12 +815,21 @@ export async function unpackKmzToKml(
   return preferredEntry.buffer();
 }
 
-export async function importKmzPlaces(tripId: string, kmzBuffer: Buffer, opts: KmlImportOptions = {}): Promise<PlaceImportResult> {
+export async function importKmzPlaces(
+  tripId: string,
+  kmzBuffer: Buffer,
+  opts: KmlImportOptions = {},
+): Promise<PlaceImportResult> {
   const kmlBuffer = await unpackKmzToKml(kmzBuffer);
   return importKmlPlaces(tripId, kmlBuffer, opts);
 }
 
-export async function importMapFile(tripId: string, fileBuffer: Buffer, filename: string, opts: KmlImportOptions = {}): Promise<PlaceImportResult> {
+export async function importMapFile(
+  tripId: string,
+  fileBuffer: Buffer,
+  filename: string,
+  opts: KmlImportOptions = {},
+): Promise<PlaceImportResult> {
   const ext = filename.toLowerCase().split('.').pop();
   if (ext === 'kmz') return importKmzPlaces(tripId, fileBuffer, opts);
   if (ext === 'kml') return importKmlPlaces(tripId, fileBuffer, opts);
@@ -677,10 +856,7 @@ function googleMapsHexId(value: unknown): string | null {
 
 function googleMapsFeatureIdFromItem(item: unknown): string | null {
   if (!Array.isArray(item)) return null;
-  const candidates = [
-    Array.isArray(item[1]) ? item[1][6] : null,
-    Array.isArray(item[7]) ? item[7][1] : null,
-  ];
+  const candidates = [Array.isArray(item[1]) ? item[1][6] : null, Array.isArray(item[7]) ? item[7][1] : null];
 
   for (const ids of candidates) {
     if (!Array.isArray(ids) || ids.length < 2) continue;
@@ -698,16 +874,23 @@ function findDuplicatePlace(
 ): { id: number; google_ftid: string | null } | null {
   const normalizedName = place.name?.trim().toLowerCase();
   if (normalizedName) {
-    const duplicate = db.prepare(`
+    const duplicate = db
+      .prepare(
+        `
       SELECT id, google_ftid FROM places
       WHERE trip_id = ? AND lower(trim(name)) = ?
       ORDER BY id ASC
       LIMIT 1
-    `).get(tripId, normalizedName) as { id: number; google_ftid: string | null } | undefined;
+    `,
+      )
+      .get(tripId, normalizedName) as { id: number; google_ftid: string | null } | undefined;
     if (duplicate) return duplicate;
   }
   if (place.lat != null && place.lng != null) {
-    return db.prepare(`
+    return (
+      (db
+        .prepare(
+          `
       SELECT id, google_ftid FROM places
       WHERE trip_id = ?
         AND lat IS NOT NULL AND lng IS NOT NULL
@@ -715,7 +898,12 @@ function findDuplicatePlace(
         AND abs(lng - ?) <= ?
       ORDER BY id ASC
       LIMIT 1
-    `).get(tripId, place.lat, COORD_DEDUP_TOLERANCE, place.lng, COORD_DEDUP_TOLERANCE) as { id: number; google_ftid: string | null } | undefined || null;
+    `,
+        )
+        .get(tripId, place.lat, COORD_DEDUP_TOLERANCE, place.lng, COORD_DEDUP_TOLERANCE) as
+        | { id: number; google_ftid: string | null }
+        | undefined) || null
+    );
   }
   return null;
 }
@@ -756,7 +944,11 @@ export async function importGoogleList(tripId: string, url: string, opts?: ListI
     // A single-place share link (…/maps/place/…) carries no list id — point the user at
     // the place search box instead of a cryptic "could not extract list ID" (#1304).
     if (resolvedUrl.includes('/maps/place/')) {
-      return { error: 'That link points to a single place, not a list. To add it, paste the link into the place search box instead of using the list import.', status: 400 };
+      return {
+        error:
+          'That link points to a single place, not a list. To add it, paste the link into the place search box instead of using the list import.',
+        status: 400,
+      };
     }
     return { error: 'Could not extract list ID from URL. Please use a shared Google Maps list link.', status: 400 };
   }
@@ -764,7 +956,10 @@ export async function importGoogleList(tripId: string, url: string, opts?: ListI
   // Fetch list data from Google Maps internal API
   const apiUrl = `https://www.google.com/maps/preview/entitylist/getlist?authuser=0&hl=en&gl=us&pb=!1m1!1s${encodeURIComponent(listId)}!2e2!3e2!4i500!16b1`;
   const apiRes = await fetch(apiUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    },
     signal: AbortSignal.timeout(15000),
   });
 
@@ -811,7 +1006,9 @@ export async function importGoogleList(tripId: string, url: string, opts?: ListI
     INSERT INTO places (trip_id, name, lat, lng, notes, google_ftid, transport_mode)
     VALUES (?, ?, ?, ?, ?, ?, 'walking')
   `);
-  const updateGoogleFtidStmt = db.prepare('UPDATE places SET google_ftid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+  const updateGoogleFtidStmt = db.prepare(
+    'UPDATE places SET google_ftid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+  );
   const created: any[] = [];
   let skipped = 0;
   const insertAll = db.transaction(() => {
@@ -859,7 +1056,11 @@ export async function importNaverList(
   // Redirects are followed manually so each hop is re-validated against the
   // SSRF guard (a short link could otherwise 302 to an internal address).
   let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { return { error: 'Invalid URL', status: 400 }; }
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return { error: 'Invalid URL', status: 400 };
+  }
   if (parsedUrl.hostname === 'naver.me') {
     try {
       const redirectRes = await safeFetchFollow(url, { signal: AbortSignal.timeout(10000) });
@@ -881,7 +1082,8 @@ export async function importNaverList(
     const apiRes = await fetch(apiUrl, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
       signal: AbortSignal.timeout(15000),
     });
@@ -891,7 +1093,7 @@ export async function importNaverList(
     }
 
     try {
-      const data = await apiRes.json() as {
+      const data = (await apiRes.json()) as {
         folder?: { bookmarkCount?: number; name?: string };
         bookmarkList?: any[];
       };
@@ -907,9 +1109,10 @@ export async function importNaverList(
   }
 
   const listName = firstPage.data.folder?.name || 'Naver Maps List';
-  const totalCount = typeof firstPage.data.folder?.bookmarkCount === 'number'
-    ? firstPage.data.folder.bookmarkCount
-    : (firstPage.data.bookmarkList?.length || 0);
+  const totalCount =
+    typeof firstPage.data.folder?.bookmarkCount === 'number'
+      ? firstPage.data.folder.bookmarkCount
+      : firstPage.data.bookmarkList?.length || 0;
 
   const allItems: any[] = [...(firstPage.data.bookmarkList || [])];
   for (let start = limit; start < totalCount; start += limit) {
@@ -930,9 +1133,12 @@ export async function importNaverList(
   for (const item of allItems) {
     const lat = Number(item?.py);
     const lng = Number(item?.px);
-    const name = typeof item?.name === 'string' && item.name.trim()
-      ? item.name.trim()
-      : (typeof item?.displayName === 'string' ? item.displayName.trim() : '');
+    const name =
+      typeof item?.name === 'string' && item.name.trim()
+        ? item.name.trim()
+        : typeof item?.displayName === 'string'
+          ? item.displayName.trim()
+          : '';
     const note = typeof item?.memo === 'string' && item.memo.trim() ? item.memo.trim() : null;
     const address = typeof item?.address === 'string' && item.address.trim() ? item.address.trim() : null;
 
@@ -978,7 +1184,9 @@ export async function importNaverList(
 // ---------------------------------------------------------------------------
 
 export async function searchPlaceImage(tripId: string, placeId: string, userId: number) {
-  const place = db.prepare('SELECT * FROM places WHERE id = ? AND trip_id = ?').get(placeId, tripId) as Place | undefined;
+  const place = db.prepare('SELECT * FROM places WHERE id = ? AND trip_id = ?').get(placeId, tripId) as
+    | Place
+    | undefined;
   if (!place) return { error: 'Place not found', status: 404 };
 
   return searchUnsplashPhotos(place.name + (place.address ? ' ' + place.address : ''), 5, getUnsplashKey(userId));

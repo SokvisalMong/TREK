@@ -59,6 +59,8 @@ export interface Place {
   lng?: number | null;
   address?: string | null;
   category_id?: number | null;
+  additional_category_ids?: number[];
+  additional_categories?: Category[];
   price?: number | null;
   currency?: string | null;
   reservation_status?: string;

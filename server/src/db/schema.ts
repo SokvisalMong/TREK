@@ -149,6 +149,12 @@ function createTables(db: Database.Database): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS place_additional_categories (
+      place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      PRIMARY KEY (place_id, category_id)
+    );
+
     CREATE TABLE IF NOT EXISTS place_tags (
       place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE,
       tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
@@ -425,6 +431,12 @@ function createTables(db: Database.Database): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS collection_place_additional_categories (
+      collection_place_id INTEGER NOT NULL REFERENCES collection_places(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      PRIMARY KEY (collection_place_id, category_id)
+    );
+
     CREATE TABLE IF NOT EXISTS collection_place_tags (
       collection_place_id INTEGER NOT NULL REFERENCES collection_places(id) ON DELETE CASCADE,
       tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
@@ -435,6 +447,10 @@ function createTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_collection_members_user ON collection_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_collection_place_tags_place ON collection_place_tags(collection_place_id);
     CREATE INDEX IF NOT EXISTS idx_collection_place_tags_tag ON collection_place_tags(tag_id);
+    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_place
+      ON collection_place_additional_categories(collection_place_id);
+    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_category
+      ON collection_place_additional_categories(category_id);
 
     -- Per-collection custom labels (distinct from the instance-wide tags table):
     -- each list defines its own labels and every place can carry several.
@@ -528,6 +544,10 @@ function createTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_day_assignments_place_id ON day_assignments(place_id);
     CREATE INDEX IF NOT EXISTS idx_place_tags_place_id ON place_tags(place_id);
     CREATE INDEX IF NOT EXISTS idx_place_tags_tag_id ON place_tags(tag_id);
+    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_place
+      ON place_additional_categories(place_id);
+    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_category
+      ON place_additional_categories(category_id);
     CREATE INDEX IF NOT EXISTS idx_trip_members_trip_id ON trip_members(trip_id);
     CREATE INDEX IF NOT EXISTS idx_trip_members_user_id ON trip_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_packing_items_trip_id ON packing_items(trip_id);

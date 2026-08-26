@@ -1,14 +1,14 @@
 // FE-COMP-COLDETAIL-001 to FE-COMP-COLDETAIL-010
-import React from 'react';
-import { render, screen } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
-import { server } from '../../../tests/helpers/msw/server';
-import { useAuthStore } from '../../store/authStore';
-import { resetAllStores, seedStore } from '../../../tests/helpers/store';
-import { buildUser } from '../../../tests/helpers/factories';
 import type { CollectionPlace } from '@trek/shared';
+import { http, HttpResponse } from 'msw';
+import React from 'react';
+import { buildCategory, buildUser } from '../../../tests/helpers/factories';
+import { server } from '../../../tests/helpers/msw/server';
+import { render, screen } from '../../../tests/helpers/render';
+import { resetAllStores, seedStore } from '../../../tests/helpers/store';
 import { useTranslation } from '../../i18n/TranslationContext';
+import { useAuthStore } from '../../store/authStore';
 import CollectionPlaceDetail from './CollectionPlaceDetail';
 
 // The component takes `t` as a PROP (not from context), so wrap it in a tiny
@@ -31,6 +31,8 @@ const place: CollectionPlace = {
   address: 'Somewhere',
   links: [{ url: 'https://x.com' }],
   category: { id: 1, name: 'Food', color: '#f00', icon: null },
+  additional_category_ids: [],
+  additional_categories: [],
 };
 
 function renderDetail(overrides: Partial<Omit<DetailProps, 't'>> = {}) {
@@ -57,11 +59,7 @@ beforeEach(() => {
   seedStore(useAuthStore, { user: buildUser(), placesPhotosEnabled: false });
   // The detail sheet asks the maps provider for a cover photo on mount when a
   // place carries no image of its own — stub it so nothing hits the network.
-  server.use(
-    http.get('/api/maps/place-photo/:id', () =>
-      HttpResponse.json({ photoUrl: null, attribution: null }),
-    ),
-  );
+  server.use(http.get('/api/maps/place-photo/:id', () => HttpResponse.json({ photoUrl: null, attribution: null })));
 });
 
 describe('CollectionPlaceDetail', () => {
@@ -102,6 +100,24 @@ describe('CollectionPlaceDetail', () => {
     expect(screen.getByRole('button', { name: /Save/i })).toBeInTheDocument();
   });
 
+  it('shows and preserves additional categories when editing', async () => {
+    const user = userEvent.setup();
+    const cafe = buildCategory({ name: 'Cafe' });
+    const categorizedPlace: CollectionPlace = {
+      ...place,
+      additional_category_ids: [cafe.id],
+      additional_categories: [cafe],
+    };
+    const props = renderDetail({
+      place: categorizedPlace,
+      categories: [cafe],
+    });
+
+    expect(screen.getByText('Cafe')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: /Save/i }));
+    expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({ additional_category_ids: [cafe.id] }));
+  });
   // ── Viewer (no edit / no delete) ────────────────────────────────────────────
   it('FE-COMP-COLDETAIL-006: hides Edit and Remove buttons when canEdit=false && canDelete=false', async () => {
     renderDetail({ canEdit: false, canDelete: false });

@@ -1,10 +1,12 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
-import { createTables } from './schema';
+import { Category, Place, Tag } from '../types';
 import { runMigrations } from './migrations';
+import { loadAdditionalCategoriesByPlaceIds } from './placeCategories';
+import { createTables } from './schema';
 import { runSeeds } from './seeds';
-import { Place, Tag } from '../types';
+
+import Database from 'better-sqlite3';
+import fs from 'fs';
+import path from 'path';
 
 // In test mode each vitest worker gets an isolated in-memory DB so that
 // parallel forks can't race on the same file or share migration state.
@@ -32,8 +34,12 @@ let _db: Database.Database | null = null;
 
 function initDb(): void {
   if (_db) {
-    try { _db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
-    try { _db.close(); } catch (e) {}
+    try {
+      _db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (e) {}
+    try {
+      _db.close();
+    } catch (e) {}
     _db = null;
   }
 
@@ -73,8 +79,12 @@ if (process.env.DEMO_MODE?.toLowerCase() === 'true') {
 
 function closeDb(): void {
   if (_db) {
-    try { _db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
-    try { _db.close(); } catch (e) {}
+    try {
+      _db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (e) {}
+    try {
+      _db.close();
+    } catch (e) {}
     _db = null;
     console.log('[DB] Database connection closed');
   }
@@ -93,35 +103,51 @@ interface PlaceWithCategory extends Place {
   category_icon: string | null;
 }
 
-interface PlaceWithTags extends Place {
-  category: { id: number; name: string; color: string; icon: string } | null;
+export interface HydratedPlace extends Place {
+  category: Category | null;
+  additional_category_ids: number[];
+  additional_categories: Category[];
   tags: Tag[];
 }
 
-function getPlaceWithTags(placeId: number | string): PlaceWithTags | null {
-  const place = db.prepare(`
+function getPlaceWithTags(placeId: number | string): HydratedPlace | null {
+  const place = db
+    .prepare(
+      `
     SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon
     FROM places p
     LEFT JOIN categories c ON p.category_id = c.id
     WHERE p.id = ?
-  `).get(placeId) as PlaceWithCategory | undefined;
+  `,
+    )
+    .get(placeId) as PlaceWithCategory | undefined;
 
   if (!place) return null;
 
-  const tags = db.prepare(`
+  const tags = db
+    .prepare(
+      `
     SELECT t.* FROM tags t
     JOIN place_tags pt ON t.id = pt.tag_id
     WHERE pt.place_id = ?
-  `).all(placeId) as Tag[];
+  `,
+    )
+    .all(placeId) as Tag[];
+
+  const additionalCategories = loadAdditionalCategoriesByPlaceIds(db, [place.id])[place.id];
 
   return {
     ...place,
-    category: place.category_id ? {
-      id: place.category_id,
-      name: place.category_name!,
-      color: place.category_color!,
-      icon: place.category_icon!,
-    } : null,
+    category: place.category_id
+      ? {
+          id: place.category_id,
+          name: place.category_name!,
+          color: place.category_color!,
+          icon: place.category_icon!,
+        }
+      : null,
+    additional_category_ids: additionalCategories.map(({ id }) => id),
+    additional_categories: additionalCategories,
     tags,
   };
 }
@@ -133,11 +159,15 @@ interface TripAccess {
 }
 
 function canAccessTrip(tripId: number | string, userId: number): TripAccess | undefined {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT t.id, t.user_id, t.currency FROM trips t
     LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ?
     WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)
-  `).get(userId, tripId, userId) as TripAccess | undefined;
+  `,
+    )
+    .get(userId, tripId, userId) as TripAccess | undefined;
 }
 
 function isOwner(tripId: number | string, userId: number): boolean {

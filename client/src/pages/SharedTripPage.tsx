@@ -19,6 +19,7 @@ import { createElement, useEffect, useRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import { getCategoryIcon } from '../components/shared/categoryIcons';
+import PlaceCategoryBadges from '../components/shared/PlaceCategoryBadges';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM } from '../constants/mapDefaults';
 import { SUPPORTED_LANGUAGES, useTranslation } from '../i18n';
 import { useSettingsStore } from '../store/settingsStore';
@@ -706,6 +707,12 @@ export default function SharedTripPage() {
                                     {place.address || place.description}
                                   </div>
                                 )}
+                                <PlaceCategoryBadges
+                                  categories={place.additional_categories}
+                                  max={2}
+                                  compact
+                                  style={{ marginTop: 3 }}
+                                />
                               </div>
                               {place.place_time && (
                                 <span

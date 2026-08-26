@@ -1,3 +1,8 @@
+import { isUpdateConflict } from '../../services/conflictResult';
+import type { User } from '../../types';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PlacesService } from './places.service';
 import {
   Body,
   Controller,
@@ -15,12 +20,8 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+
 import { memoryStorage } from 'multer';
-import type { User } from '../../types';
-import { PlacesService } from './places.service';
-import { isUpdateConflict } from '../../services/conflictResult';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CurrentUser } from '../auth/current-user.decorator';
 
 const STRING_LIMITS: Record<string, number> = { name: 200, description: 2000, address: 500, notes: 2000 };
 const UPLOAD = { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } };
@@ -36,6 +37,16 @@ function validateLengths(body: Record<string, unknown>): void {
 
 function parseBool(v: unknown, defaultVal: boolean): boolean {
   return v === undefined || v === null ? defaultVal : String(v) === 'true';
+}
+
+function parseCategoryIds(raw: unknown): number[] | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const values = (Array.isArray(raw) ? raw : [raw]).flatMap((value) => String(value).split(','));
+  const categoryIds = values.filter(Boolean).map(Number);
+  if (categoryIds.some((categoryId) => !Number.isInteger(categoryId) || categoryId <= 0)) {
+    throw new HttpException({ error: 'category_ids must contain positive integers' }, 400);
+  }
+  return categoryIds;
 }
 
 /**
@@ -74,9 +85,18 @@ export class PlacesController {
     @Query('search') search?: string,
     @Query('category') category?: string,
     @Query('tag') tag?: string,
+    @Query('category_ids') categoryIdsRaw?: string | string[],
+    @Query('category_ids[]') bracketedCategoryIdsRaw?: string | string[],
   ) {
     this.requireTrip(tripId, user);
-    return { places: this.places.list(tripId, { search, category, tag }) };
+    const category_ids = parseCategoryIds(categoryIdsRaw ?? bracketedCategoryIdsRaw);
+    const filters = {
+      search,
+      category,
+      tag,
+      ...(category_ids !== undefined ? { category_ids } : {}),
+    };
+    return { places: this.places.list(tripId, filters) };
   }
 
   @Post()
@@ -118,7 +138,12 @@ export class PlacesController {
     if (!importWaypoints && !importRoutes && !importTracks) {
       throw new HttpException({ error: 'No import types selected' }, 400);
     }
-    const result = this.places.importGpx(tripId, file.buffer, { importWaypoints, importRoutes, importTracks, defaultName: file.originalname });
+    const result = this.places.importGpx(tripId, file.buffer, {
+      importWaypoints,
+      importRoutes,
+      importTracks,
+      defaultName: file.originalname,
+    });
     if (!result) {
       throw new HttpException({ error: 'No matching places found in GPX file' }, 400);
     }
@@ -148,7 +173,10 @@ export class PlacesController {
       throw new HttpException({ error: 'No import types selected' }, 400);
     }
     try {
-      const result = await this.places.importMapFile(tripId, file.buffer, file.originalname, { importPoints, importPaths });
+      const result = await this.places.importMapFile(tripId, file.buffer, file.originalname, {
+        importPoints,
+        importPaths,
+      });
       if (result.summary?.totalPlacemarks === 0) {
         throw new HttpException({ error: 'No valid Placemarks found in map file', summary: result.summary }, 400);
       }
@@ -164,17 +192,36 @@ export class PlacesController {
   }
 
   @Post('import/google-list')
-  async importGoogle(@CurrentUser() user: User, @Param('tripId') tripId: string, @Body('url') url: unknown, @Body('enrich') enrich: unknown, @Headers('x-socket-id') socketId?: string) {
+  async importGoogle(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+    @Body('url') url: unknown,
+    @Body('enrich') enrich: unknown,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
     return this.importList('google', user, tripId, url, enrich, socketId);
   }
 
   @Post('import/naver-list')
-  async importNaver(@CurrentUser() user: User, @Param('tripId') tripId: string, @Body('url') url: unknown, @Body('enrich') enrich: unknown, @Headers('x-socket-id') socketId?: string) {
+  async importNaver(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+    @Body('url') url: unknown,
+    @Body('enrich') enrich: unknown,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
     return this.importList('naver', user, tripId, url, enrich, socketId);
   }
 
   /** Shared google/naver list import — identical flow, different provider + error string. */
-  private async importList(provider: 'google' | 'naver', user: User, tripId: string, url: unknown, enrich: unknown, socketId?: string) {
+  private async importList(
+    provider: 'google' | 'naver',
+    user: User,
+    tripId: string,
+    url: unknown,
+    enrich: unknown,
+    socketId?: string,
+  ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
     if (!url || typeof url !== 'string') {
@@ -185,9 +232,10 @@ export class PlacesController {
     const opts = { enrich: parseBool(enrich, false), userId: user.id };
     const label = provider === 'google' ? 'Google' : 'Naver';
     try {
-      const result = provider === 'google'
-        ? await this.places.importGoogleList(tripId, url, opts)
-        : await this.places.importNaverList(tripId, url, opts);
+      const result =
+        provider === 'google'
+          ? await this.places.importGoogleList(tripId, url, opts)
+          : await this.places.importNaverList(tripId, url, opts);
       if ('error' in result) {
         throw new HttpException({ error: result.error }, result.status);
       }
@@ -198,7 +246,10 @@ export class PlacesController {
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
       console.error(`[Places] ${label} list import error:`, err instanceof Error ? err.message : err);
-      throw new HttpException({ error: `Failed to import ${label} Maps list. Make sure the list is shared publicly.` }, 400);
+      throw new HttpException(
+        { error: `Failed to import ${label} Maps list. Make sure the list is shared publicly.` },
+        400,
+      );
     }
   }
 
@@ -231,29 +282,49 @@ export class PlacesController {
   bulkUpdate(
     @CurrentUser() user: User,
     @Param('tripId') tripId: string,
-    @Body() body: { ids?: unknown; category_id?: unknown },
+    @Body() body: { ids?: unknown; category_id?: unknown; additional_category_ids?: unknown },
     @Headers('x-socket-id') socketId?: string,
   ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
     const { ids } = body;
-    if (!Array.isArray(ids) || ids.some((v) => typeof v !== 'number')) {
+    if (!Array.isArray(ids) || ids.some((value) => typeof value !== 'number')) {
       throw new HttpException({ error: 'ids must be an array of numbers' }, 400);
     }
-    if (ids.length === 0) {
-      return { updated: [], count: 0 };
-    }
-    // `category_id` may be a number or null (null clears it), so key presence —
-    // not truthiness — is what signals there's something to change.
-    if (!('category_id' in body)) {
+    if (ids.length === 0) return { updated: [], count: 0 };
+    if (!('category_id' in body) && !('additional_category_ids' in body)) {
       throw new HttpException({ error: 'Provide at least one field to update' }, 400);
     }
-    const updated = this.places.updateMany(tripId, ids, { category_id: body.category_id as number | null });
+
+    const update: { category_id?: number | null; additional_category_ids?: number[] } = {};
+    if ('category_id' in body) {
+      const categoryId = body.category_id;
+      if (categoryId === null) {
+        update.category_id = null;
+      } else if (typeof categoryId === 'number' && Number.isInteger(categoryId) && categoryId > 0) {
+        update.category_id = categoryId;
+      } else {
+        throw new HttpException({ error: 'category_id must be a positive integer or null' }, 400);
+      }
+    }
+    if ('additional_category_ids' in body) {
+      if (
+        !Array.isArray(body.additional_category_ids) ||
+        body.additional_category_ids.some(
+          (categoryId) => typeof categoryId !== 'number' || !Number.isInteger(categoryId) || categoryId <= 0,
+        )
+      ) {
+        throw new HttpException({ error: 'additional_category_ids must be an array of positive integers' }, 400);
+      }
+      update.additional_category_ids = body.additional_category_ids;
+    }
+
+    const updated = this.places.updateMany(tripId, ids, update);
     for (const place of updated) {
       this.places.broadcast(tripId, 'place:updated', { place }, socketId);
       this.places.onUpdated(place.id);
     }
-    return { updated: updated.map((p) => p.id), count: updated.length };
+    return { updated: updated.map(({ id }) => id), count: updated.length, places: updated };
   }
 
   @Get(':id')
@@ -310,7 +381,12 @@ export class PlacesController {
   }
 
   @Delete(':id')
-  remove(@CurrentUser() user: User, @Param('tripId') tripId: string, @Param('id') id: string, @Headers('x-socket-id') socketId?: string) {
+  remove(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+    @Param('id') id: string,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
     this.places.onDeleted(Number(id)); // sync before actual delete

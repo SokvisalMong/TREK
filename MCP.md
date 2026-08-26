@@ -189,7 +189,7 @@ making changes.
 | Trips                 | `trek://trips`                                  | All trips you own or are a member of                                                  |
 | Trip Detail           | `trek://trips/{tripId}`                         | Single trip with metadata and member count                                            |
 | Days                  | `trek://trips/{tripId}/days`                    | Days of a trip with their assigned places                                             |
-| Places                | `trek://trips/{tripId}/places`                  | All places/POIs saved in a trip. Supports `?assignment=all\|unassigned\|assigned`     |
+| Places                | `trek://trips/{tripId}/places`                  | All places/POIs. Supports `?assignment=`, legacy `?category=`, and repeated/comma-separated `?category_ids=` OR filters |
 | Budget                | `trek://trips/{tripId}/budget`                  | Budget and expense items                                                              |
 | Budget Per-Person     | `trek://trips/{tripId}/budget/per-person`       | Per-person totals and split breakdown                                                 |
 | Budget Settlement     | `trek://trips/{tripId}/budget/settlement`       | Suggested transactions to settle who owes whom                                        |
@@ -276,14 +276,19 @@ Compound tools collapse common multi-step workflows into a single atomic call. E
 
 | Tool             | Description                                                                                      |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `list_places`              | List places/POIs in a trip, optionally filtered by assignment status, category, tag, or search.  |
-| `create_place`             | Add a place/POI with name, coordinates, address, category, notes, website, phone, and optional `google_place_id` / `osm_id` for opening hours. |
-| `update_place`             | Update any field of an existing place including transport mode, timing, and price.               |
-| `delete_place`             | Remove a place from a trip.                                                                      |
+| `list_places`              | List places/POIs, optionally filtering `category_ids` with primary-or-additional OR semantics, the legacy single `category`, assignment status, tag, or search. |
+| `create_place`             | Add a place/POI with a primary `category_id`, `additional_category_ids`, coordinates, notes, contact details, and provider IDs. |
+| `update_place`             | Update a place. Omit `additional_category_ids` to preserve them, pass `[]` to clear them, or pass an array to replace the complete additional set. |
+| `bulk_update_places`       | Apply the same primary and/or complete additional category set, price, timing, or other supported fields to several places. |
+| `delete_place`             | Remove a place from a trip. |
 | `bulk_delete_places`       | Delete multiple places at once by ID. Removes all day assignments as well. **Cannot be undone.** |
-| `import_places_from_url`   | Import all places from a publicly shared Google Maps or Naver Maps list URL.                     |
-| `list_categories`          | List all available place categories with id, name, icon and color.                              |
+| `import_places_from_url`   | Import all places from a publicly shared Google Maps or Naver Maps list URL. |
+| `list_categories`          | List all available place categories with id, name, icon and color. |
 | `search_place`             | Search for a real-world place by name or address. Returns `osm_id` and `google_place_id` for use in `create_place`. |
+
+`category_id` remains the primary category and controls the map marker. `additional_category_ids` is a distinct shared classification set; duplicate IDs and the primary ID are normalized away. Place responses include both `additional_category_ids` and resolved `additional_categories`. `create_and_assign_place` and `create_place_accommodation` accept the same category fields.
+
+For `list_places`, `category_ids: [2, 7]` matches a place whose primary **or** additional set contains either ID and returns it once. The legacy `category: "2"` filter remains supported. `category: "uncategorized"` means no primary and no additional categories.
 
 ### Day Planning
 

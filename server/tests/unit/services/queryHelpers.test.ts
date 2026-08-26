@@ -1,11 +1,11 @@
+import { formatAssignmentWithPlace } from '../../../src/services/queryHelpers';
+import type { AssignmentRow, Category, Tag, Participant } from '../../../src/types';
+
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../../src/db/database', () => ({
   db: { prepare: () => ({ all: () => [], get: vi.fn() }) },
 }));
-
-import { formatAssignmentWithPlace } from '../../../src/services/queryHelpers';
-import type { AssignmentRow, Tag, Participant } from '../../../src/types';
 
 function makeRow(overrides: Partial<AssignmentRow> = {}): AssignmentRow {
   return {
@@ -40,17 +40,13 @@ function makeRow(overrides: Partial<AssignmentRow> = {}): AssignmentRow {
   } as AssignmentRow;
 }
 
-const sampleTags: Partial<Tag>[] = [
-  { id: 1, name: 'Must-see', color: '#ef4444' },
-];
+const sampleTags: Partial<Tag>[] = [{ id: 1, name: 'Must-see', color: '#ef4444' }];
 
-const sampleParticipants: Participant[] = [
-  { user_id: 42, username: 'alice', avatar: null },
-];
+const sampleParticipants: Participant[] = [{ user_id: 42, username: 'alice', avatar: null }];
 
 describe('formatAssignmentWithPlace', () => {
   it('nests place fields correctly from flat row', () => {
-    const result = formatAssignmentWithPlace(makeRow(), [], []);
+    const result = formatAssignmentWithPlace(makeRow(), [], [], []);
     const { place } = result;
     expect(place.id).toBe(100);
     expect(place.name).toBe('Eiffel Tower');
@@ -73,7 +69,7 @@ describe('formatAssignmentWithPlace', () => {
   });
 
   it('constructs place.category object when category_id is present', () => {
-    const result = formatAssignmentWithPlace(makeRow(), [], []);
+    const result = formatAssignmentWithPlace(makeRow(), [], [], []);
     expect(result.place.category).toEqual({
       id: 5,
       name: 'Sightseeing',
@@ -82,13 +78,23 @@ describe('formatAssignmentWithPlace', () => {
     });
   });
 
+  it('includes resolved additional category ids and objects', () => {
+    const additionalCategories: Category[] = [
+      { id: 8, name: 'Cafe', color: '#f97316', icon: 'coffee' },
+      { id: 9, name: 'Nature', color: '#84cc16', icon: 'trees' },
+    ];
+    const result = formatAssignmentWithPlace(makeRow(), [], [], additionalCategories);
+    expect(result.place.additional_category_ids).toEqual([8, 9]);
+    expect(result.place.additional_categories).toEqual(additionalCategories);
+  });
+
   it('sets place.category to null when category_id is null', () => {
-    const result = formatAssignmentWithPlace(makeRow({ category_id: null as any }), [], []);
+    const result = formatAssignmentWithPlace(makeRow({ category_id: null as any }), [], [], []);
     expect(result.place.category).toBeNull();
   });
 
   it('sets place.category to null when category_id is 0 (falsy)', () => {
-    const result = formatAssignmentWithPlace(makeRow({ category_id: 0 as any }), [], []);
+    const result = formatAssignmentWithPlace(makeRow({ category_id: 0 as any }), [], [], []);
     expect(result.place.category).toBeNull();
   });
 });

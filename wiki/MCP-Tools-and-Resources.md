@@ -49,15 +49,17 @@ Requires `places:read` or `places:write` scope.
 
 | Tool | Description |
 |---|---|
-| `list_places` | List places in a trip, optionally filtered by assignment status, category, tag, or search query. |
-| `create_place` | Add a place with name, coordinates, address, category, notes, website, phone, and optional `google_place_id` / `osm_id`. |
-| `update_place` | Update any field of an existing place including transport mode, timing, and price. |
-| `bulk_update_places` | Update many places at once, applying the same field values (e.g. category, price, transport mode) to every listed place in a single call. |
+| `list_places` | List places, optionally filtering `category_ids` with primary-or-additional OR semantics, the legacy single `category`, assignment status, tag, or search. |
+| `create_place` | Add a place with primary `category_id`, `additional_category_ids`, coordinates, notes, contact details, and provider IDs. |
+| `update_place` | Update a place. Omit `additional_category_ids` to preserve, pass `[]` to clear, or pass an array to replace the complete additional set. |
+| `bulk_update_places` | Apply the same primary and/or complete additional category set and other supported values to many places. |
 | `delete_place` | Remove a place from a trip. Also removes all day assignments. |
 | `bulk_delete_places` | Delete multiple places by ID. Removes all day assignments. Cannot be undone. |
 | `import_places_from_url` | Import all places from a publicly shared Google Maps or Naver Maps list URL. |
 | `list_categories` | List all available place categories with id, name, icon, and color. |
 | `search_place` | Search for a place by name or address. Returns `osm_id` and `google_place_id` for use in `create_place`. |
+
+`category_id` remains the primary visual category. `additional_category_ids` is normalized (deduplicated with the primary removed), and responses also contain resolved `additional_categories`. `create_and_assign_place` and `create_place_accommodation` accept the same fields. `category: "uncategorized"` matches only places with neither a primary nor additional categories.
 
 ### Day Planning
 
@@ -188,7 +190,7 @@ Resources provide read-only access via `trek://` URIs. Read them to understand c
 | `trek://trips` | `trips:*` | All trips you own or are a member of |
 | `trek://trips/{tripId}` | `trips:*` | Single trip with metadata and member count |
 | `trek://trips/{tripId}/days` | `trips:*` | Days of a trip with their assigned places |
-| `trek://trips/{tripId}/places` | `places:read` | All places in a trip. Supports `?assignment=all\|unassigned\|assigned` |
+| `trek://trips/{tripId}/places` | `places:read` | All places. Supports `?assignment=`, legacy `?category=`, and repeated/comma-separated `?category_ids=` OR filters |
 | `trek://trips/{tripId}/reservations` | `reservations:read` | Flights, hotels, restaurants, and other reservations |
 | `trek://trips/{tripId}/days/{dayId}/notes` | `trips:*` | Notes for a specific day |
 | `trek://trips/{tripId}/accommodations` | `trips:*` | Hotels and rentals with check-in/out details |

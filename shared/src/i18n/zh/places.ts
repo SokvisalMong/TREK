@@ -84,5 +84,9 @@ const places: TranslationStrings = {
   'places.addAnyway': '仍然添加',
   'places.enrichOnImport': '通过 Google 丰富地点信息',
   'places.enrichOnImportHint': '查找每个导入的地点以补充照片、地址和联系方式。需要 Google Maps 密钥。',
+  'places.formAdditionalCategories': '其他类别',
+  'places.addAdditionalCategory': '添加其他类别',
+  'places.removeAdditionalCategory': '移除{name}',
+  'places.primaryCategory': '主要类别',
 };
 export default places;

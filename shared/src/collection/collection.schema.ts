@@ -1,4 +1,4 @@
-import { placeCategorySchema } from '../place/place.schema';
+import { additionalCategoryIdsSchema, placeCategoryItemSchema, placeCategorySchema } from '../place/place.schema';
 import { tagSchema } from '../tag/tag.schema';
 
 import { z } from 'zod';
@@ -67,6 +67,8 @@ export const collectionPlaceSchema = z.object({
   updated_at: z.string().optional(),
   links: collectionLinksSchema.optional(),
   category: placeCategorySchema.optional(),
+  additional_category_ids: z.array(z.number()),
+  additional_categories: z.array(placeCategoryItemSchema),
   tags: z.array(tagSchema.partial()).optional(),
   /** Ids of the per-collection labels assigned to this place. */
   label_ids: z.array(z.number()).optional(),
@@ -135,6 +137,7 @@ export const collectionSavePlaceRequestSchema = z.object({
   lng: z.number().nullable().optional(),
   address: z.string().nullable().optional(),
   category_id: z.number().nullable().optional(),
+  additional_category_ids: additionalCategoryIdsSchema.optional(),
   price: z.number().nullable().optional(),
   currency: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
@@ -178,6 +181,7 @@ export const collectionPlaceUpdateRequestSchema = z.object({
   // .catch('idea') guard against invalid values is preserved.
   status: collectionStatusSchema.removeDefault().optional(),
   category_id: z.number().nullable().optional(),
+  additional_category_ids: additionalCategoryIdsSchema.optional(),
   collection_id: z.number().optional(), // move to another list
   links: collectionLinksSchema.optional(),
   tag_ids: z.array(z.number()).optional(),
