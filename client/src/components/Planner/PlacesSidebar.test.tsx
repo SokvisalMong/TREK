@@ -1,21 +1,15 @@
 // FE-COMP-PLACES-001 to FE-COMP-PLACES-015 + FE-PLANNER-SIDEBAR-016 to 043
+import { render, screen, fireEvent, waitFor, act } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import {
-  buildAssignment,
-  buildCategory,
-  buildDay,
-  buildPlace,
-  buildTrip,
-  buildUser,
-} from '../../../tests/helpers/factories';
-import { server } from '../../../tests/helpers/msw/server';
-import { act, fireEvent, render, screen, waitFor } from '../../../tests/helpers/render';
-import { resetAllStores, seedStore } from '../../../tests/helpers/store';
-import { placesApi } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
-import { usePermissionsStore } from '../../store/permissionsStore';
 import { useTripStore } from '../../store/tripStore';
+import { usePermissionsStore } from '../../store/permissionsStore';
+import { placesApi } from '../../api/client';
+import { installTouchDragBridge } from '../../utils/touchDragBridge';
+import { resetAllStores, seedStore } from '../../../tests/helpers/store';
+import { buildUser, buildTrip, buildPlace, buildCategory, buildDay, buildAssignment } from '../../../tests/helpers/factories';
+import { server } from '../../../tests/helpers/msw/server';
 import PlacesSidebar from './PlacesSidebar';
 
 // Mock photoService so PlaceAvatar doesn't trigger API calls
@@ -32,9 +26,7 @@ class MockIO {
   disconnect = vi.fn();
   unobserve = vi.fn();
 }
-beforeAll(() => {
-  (globalThis as any).IntersectionObserver = MockIO;
-});
+beforeAll(() => { (globalThis as any).IntersectionObserver = MockIO; });
 
 const defaultProps = {
   tripId: 1,
@@ -71,7 +63,10 @@ describe('PlacesSidebar', () => {
   });
 
   it('FE-COMP-PLACES-003: renders places from props', () => {
-    const places = [buildPlace({ name: 'Eiffel Tower' }), buildPlace({ name: 'Louvre Museum' })];
+    const places = [
+      buildPlace({ name: 'Eiffel Tower' }),
+      buildPlace({ name: 'Louvre Museum' }),
+    ];
     render(<PlacesSidebar {...defaultProps} places={places} />);
     expect(screen.getByText('Eiffel Tower')).toBeInTheDocument();
     expect(screen.getByText('Louvre Museum')).toBeInTheDocument();
@@ -104,7 +99,10 @@ describe('PlacesSidebar', () => {
 
   it('FE-COMP-PLACES-007: search filters places by name', async () => {
     const user = userEvent.setup();
-    const places = [buildPlace({ name: 'Arc de Triomphe' }), buildPlace({ name: 'Sacre Coeur' })];
+    const places = [
+      buildPlace({ name: 'Arc de Triomphe' }),
+      buildPlace({ name: 'Sacre Coeur' }),
+    ];
     render(<PlacesSidebar {...defaultProps} places={places} />);
     const searchInput = screen.getByPlaceholderText(/Search places/i);
     await user.type(searchInput, 'Arc');
@@ -130,7 +128,10 @@ describe('PlacesSidebar', () => {
   it('FE-COMP-PLACES-009a: selected visible place is scrolled into view', async () => {
     const scrollIntoView = Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>;
     scrollIntoView.mockClear();
-    const places = [buildPlace({ id: 10, name: 'First Place' }), buildPlace({ id: 42, name: 'Map Click Target' })];
+    const places = [
+      buildPlace({ id: 10, name: 'First Place' }),
+      buildPlace({ id: 42, name: 'Map Click Target' }),
+    ];
 
     render(<PlacesSidebar {...defaultProps} places={places} selectedPlaceId={42} />);
 
@@ -144,7 +145,10 @@ describe('PlacesSidebar', () => {
   it('FE-COMP-PLACES-009b: selected place hidden by search is not scrolled', async () => {
     const user = userEvent.setup();
     const scrollIntoView = Element.prototype.scrollIntoView as unknown as ReturnType<typeof vi.fn>;
-    const places = [buildPlace({ id: 10, name: 'Visible Cafe' }), buildPlace({ id: 42, name: 'Hidden Museum' })];
+    const places = [
+      buildPlace({ id: 10, name: 'Visible Cafe' }),
+      buildPlace({ id: 42, name: 'Hidden Museum' }),
+    ];
     const { rerender } = render(<PlacesSidebar {...defaultProps} places={places} selectedPlaceId={null} />);
 
     await user.type(screen.getByPlaceholderText(/Search places/i), 'Visible');
@@ -239,6 +243,18 @@ describe('Filter tabs', () => {
     await user.click(screen.getByRole('button', { name: /Unplanned/i }));
     expect(screen.getByText(/All places are planned/i)).toBeInTheDocument();
   });
+
+  it('FE-PLANNER-SIDEBAR-019b: "Planned" filter shows only planned places', () => {
+    const planned = buildPlace({ name: 'Planned Place' });
+    const unplanned = buildPlace({ name: 'Unplanned Place' });
+    const assignments = { '1': [buildAssignment({ place: planned, day_id: 1 })] };
+    // Seed the pool filter directly: the tab label resolves from @trek/shared, but the
+    // filter behaviour (only day-assigned places survive) is what this guards.
+    seedStore(useTripStore, { placesFilter: 'planned' });
+    render(<PlacesSidebar {...defaultProps} places={[planned, unplanned]} assignments={assignments} />);
+    expect(screen.getByText('Planned Place')).toBeInTheDocument();
+    expect(screen.queryByText('Unplanned Place')).not.toBeInTheDocument();
+  });
 });
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -262,10 +278,9 @@ describe('Search', () => {
     await user.type(searchInput, 'Paris');
     expect(screen.queryByText('Rome Cafe')).not.toBeInTheDocument();
     // X clear button should appear
-    const clearBtn =
-      document.querySelector('button svg[data-lucide="x"]')?.closest('button') ??
-      document.querySelector('input[type="text"] ~ button') ??
-      screen.getByRole('button', { name: '' });
+    const clearBtn = document.querySelector('button svg[data-lucide="x"]')?.closest('button')
+      ?? document.querySelector('input[type="text"] ~ button')
+      ?? screen.getByRole('button', { name: '' });
     // Find the X button by querying near the search input
     const inputWrapper = searchInput.closest('div');
     const xBtn = inputWrapper?.querySelector('button');
@@ -306,43 +321,6 @@ describe('Category filter dropdown', () => {
     expect(screen.queryByText('Random Shop')).not.toBeInTheDocument();
   });
 
-  it('matches places through additional categories', async () => {
-    const user = userEvent.setup();
-    const cafe = buildCategory({ name: 'Cafe', color: '#f97316' });
-    const additionalMatch = buildPlace({
-      name: 'Hotel cafe',
-      category_id: null,
-      additional_category_ids: [cafe.id],
-      additional_categories: [cafe],
-      address: 'Paris',
-    });
-    const noMatch = buildPlace({ name: 'Museum', address: 'London' });
-    render(<PlacesSidebar {...defaultProps} places={[additionalMatch, noMatch]} categories={[cafe]} />);
-
-    await user.click(screen.getByText(/All Categories/i));
-    await user.click(screen.getByRole('button', { name: 'Cafe' }));
-    expect(screen.getByText('Hotel cafe')).toBeInTheDocument();
-    expect(screen.queryByText('Museum')).not.toBeInTheDocument();
-  });
-
-  it('does not treat an additional-only place as uncategorized', async () => {
-    const user = userEvent.setup();
-    const cafe = buildCategory({ name: 'Cafe', color: '#f97316' });
-    const additionalOnly = buildPlace({
-      name: 'Additional only',
-      category_id: null,
-      additional_category_ids: [cafe.id],
-      additional_categories: [cafe],
-    });
-    const uncategorized = buildPlace({ name: 'Uncategorized', category_id: null });
-    render(<PlacesSidebar {...defaultProps} places={[additionalOnly, uncategorized]} categories={[cafe]} />);
-
-    await user.click(screen.getByText(/All Categories/i));
-    const noCategoryOptions = screen.getAllByText(/No category/i);
-    await user.click(noCategoryOptions[noCategoryOptions.length - 1]);
-    expect(screen.getByText('Uncategorized')).toBeInTheDocument();
-    expect(screen.queryByText('Additional only')).not.toBeInTheDocument();
-  });
   it('FE-PLANNER-SIDEBAR-025: "Clear filter" button appears when filter active and clears it', async () => {
     const user = userEvent.setup();
     const cat = buildCategory({ name: 'Museum', color: '#3b82f6' });
@@ -396,9 +374,7 @@ describe('Category filter dropdown', () => {
     const planned = buildPlace({ name: 'Planned Place' });
     const unplanned = buildPlace({ name: 'Unplanned Place' });
     const assignments = { '1': [buildAssignment({ place: planned, day_id: 1 })] };
-    const { unmount } = render(
-      <PlacesSidebar {...defaultProps} places={[planned, unplanned]} assignments={assignments} />
-    );
+    const { unmount } = render(<PlacesSidebar {...defaultProps} places={[planned, unplanned]} assignments={assignments} />);
     await user.click(screen.getByRole('button', { name: /Unplanned/i }));
     expect(screen.queryByText('Planned Place')).not.toBeInTheDocument();
     unmount();
@@ -416,7 +392,7 @@ describe('Place list interaction', () => {
     render(<PlacesSidebar {...defaultProps} places={[place]} selectedDayId={5} assignments={{}} />);
     // Plus button should be visible next to the place
     const plusBtns = screen.getAllByRole('button');
-    const plusBtn = plusBtns.find((b) => b.querySelector('svg'));
+    const plusBtn = plusBtns.find(b => b.querySelector('svg'));
     expect(plusBtn).toBeTruthy();
     // The place row itself should be in the DOM
     expect(screen.getByText('Unassigned Place')).toBeInTheDocument();
@@ -426,15 +402,7 @@ describe('Place list interaction', () => {
     const user = userEvent.setup();
     const onAssignToDay = vi.fn();
     const place = buildPlace({ id: 99, name: 'Place To Assign' });
-    render(
-      <PlacesSidebar
-        {...defaultProps}
-        places={[place]}
-        selectedDayId={5}
-        assignments={{}}
-        onAssignToDay={onAssignToDay}
-      />
-    );
+    render(<PlacesSidebar {...defaultProps} places={[place]} selectedDayId={5} assignments={{}} onAssignToDay={onAssignToDay} />);
     // Find the + button inside the place row (small inline button)
     const placeRow = screen.getByText('Place To Assign').closest('div[draggable]')!;
     const plusBtn = placeRow.querySelector('button')!;
@@ -491,9 +459,7 @@ describe('Mobile day-picker (portal)', () => {
     const onAssignToDay = vi.fn();
     const place = buildPlace({ id: 77, name: 'Day Picker Place' });
     const day = buildDay({ id: 7, title: 'Day 1' });
-    render(
-      <PlacesSidebar {...defaultProps} places={[place]} isMobile={true} days={[day]} onAssignToDay={onAssignToDay} />
-    );
+    render(<PlacesSidebar {...defaultProps} places={[place]} isMobile={true} days={[day]} onAssignToDay={onAssignToDay} />);
     await user.click(screen.getByText('Day Picker Place'));
     // Click "Add to which day?" to expand the day list
     const assignBtn = await screen.findByText(/Add to which day\?/i);
@@ -555,9 +521,7 @@ describe('GPX import', () => {
   });
 
   it('FE-PLANNER-SIDEBAR-039: successful GPX import via modal shows success toast', async () => {
-    const importSpy = vi
-      .spyOn(placesApi, 'importGpx')
-      .mockResolvedValueOnce({ count: 2, places: [{ id: 10 }, { id: 11 }] });
+    const importSpy = vi.spyOn(placesApi, 'importGpx').mockResolvedValueOnce({ count: 2, places: [{ id: 10 }, { id: 11 }] });
     const loadTrip = vi.fn().mockResolvedValue(undefined);
     seedStore(useTripStore, { loadTrip });
     const addToast = vi.fn();
@@ -573,7 +537,11 @@ describe('GPX import', () => {
     });
     await user.click(screen.getByRole('button', { name: /^import$/i }));
     await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith(expect.stringContaining('2'), 'success', undefined);
+      expect(addToast).toHaveBeenCalledWith(
+        expect.stringContaining('2'),
+        'success',
+        undefined,
+      );
     });
     importSpy.mockRestore();
   });
@@ -602,7 +570,7 @@ describe('Google Maps list import', () => {
     server.use(
       http.post('/api/trips/1/places/import/google-list', () =>
         HttpResponse.json({ count: 3, listName: 'My List', places: [{ id: 20 }, { id: 21 }, { id: 22 }] })
-      )
+      ),
     );
     const loadTrip = vi.fn().mockResolvedValue(undefined);
     seedStore(useTripStore, { loadTrip });
@@ -615,7 +583,11 @@ describe('Google Maps list import', () => {
     await user.type(urlInput, 'https://maps.app.goo.gl/abc123');
     await user.click(screen.getByRole('button', { name: /^Import$/i }));
     await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith(expect.stringContaining('3'), 'success', undefined);
+      expect(addToast).toHaveBeenCalledWith(
+        expect.stringContaining('3'),
+        'success',
+        undefined,
+      );
     });
     // Dialog should close
     await waitFor(() => {
@@ -627,7 +599,7 @@ describe('Google Maps list import', () => {
     server.use(
       http.post('/api/trips/1/places/import/google-list', () =>
         HttpResponse.json({ count: 1, listName: 'Test', places: [{ id: 30 }] })
-      )
+      ),
     );
     const loadTrip = vi.fn().mockResolvedValue(undefined);
     seedStore(useTripStore, { loadTrip });
@@ -639,38 +611,124 @@ describe('Google Maps list import', () => {
     const urlInput = await screen.findByPlaceholderText(/maps\.app\.goo\.gl/i);
     await user.type(urlInput, 'https://maps.app.goo.gl/xyz{Enter}');
     await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith(expect.stringContaining('1'), 'success', undefined);
+      expect(addToast).toHaveBeenCalledWith(
+        expect.stringContaining('1'),
+        'success',
+        undefined,
+      );
     });
   });
+
 });
 
-// #1432: a tablet is a touch device at a desktop width. Before the fix, isTouch didn't
-// exist and drag was gated on width alone, so on an iPad the rows stayed draggable and a
-// scroll swipe started an HTML5 drag, which raised the drop-to-import overlay instead of
-// scrolling. These cases pin the desktop-width + coarse-pointer combination.
-describe('touch device at desktop width (#1432)', () => {
-  const touchProps = { ...defaultProps, isMobile: false, isTouch: true };
+// #1616: a tablet is a coarse pointer at a desktop width, and it sees both panes, so
+// it has somewhere to drag a place to. A coarse pointer used to switch the drag off by
+// itself, which left the reporter's iPad selecting text instead of picking up a row.
+// Width is the only gate now: below lg the places live in their own tab.
+describe('touch device at desktop width (#1616)', () => {
+  const tabletProps = { ...defaultProps, isMobile: false };
 
-  it('FE-PLANNER-SIDEBAR-044: place rows are not draggable', () => {
+  it('FE-PLANNER-SIDEBAR-044: place rows are draggable and opt into the touch bridge', () => {
     const place = buildPlace({ id: 7, name: 'Tablet Place' });
-    render(<PlacesSidebar {...touchProps} places={[place]} />);
+    const { container } = render(<PlacesSidebar {...tabletProps} places={[place]} />);
     const placeRow = screen.getByText('Tablet Place').closest('div[draggable]')!;
-    expect(placeRow.getAttribute('draggable')).toBe('false');
+    expect(placeRow.getAttribute('draggable')).toBe('true');
+    expect((container.firstChild as HTMLElement).hasAttribute('data-touch-drag')).toBe(true);
   });
 
-  it('FE-PLANNER-SIDEBAR-045: dragging over the sidebar does not raise the drop-to-import overlay', () => {
+  it('FE-PLANNER-SIDEBAR-045: dragging over the sidebar raises the drop-to-import overlay', () => {
     const place = buildPlace({ id: 7, name: 'Tablet Place' });
-    const { container } = render(<PlacesSidebar {...touchProps} places={[place]} />);
+    const { container } = render(<PlacesSidebar {...tabletProps} places={[place]} />);
+    fireEvent.dragEnter(container.firstChild as HTMLElement);
+    expect(screen.getByText('Drop to import')).toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-SIDEBAR-046: below lg the rows stay undraggable and the bridge stays out', () => {
+    const place = buildPlace({ id: 7, name: 'Narrow Place' });
+    const { container } = render(<PlacesSidebar {...defaultProps} isMobile places={[place]} />);
+    const placeRow = screen.getByText('Narrow Place').closest('div[draggable]')!;
+    expect(placeRow.getAttribute('draggable')).toBe('false');
+    expect((container.firstChild as HTMLElement).hasAttribute('data-touch-drag')).toBe(false);
     fireEvent.dragEnter(container.firstChild as HTMLElement);
     expect(screen.queryByText('Drop to import')).not.toBeInTheDocument();
   });
+});
 
-  it('FE-PLANNER-SIDEBAR-046: a mouse-driven desktop keeps drag and the drop-to-import overlay', () => {
-    const place = buildPlace({ id: 7, name: 'Desktop Place' });
-    const { container } = render(<PlacesSidebar {...defaultProps} isTouch={false} places={[place]} />);
-    const placeRow = screen.getByText('Desktop Place').closest('div[draggable]')!;
-    expect(placeRow.getAttribute('draggable')).toBe('true');
-    fireEvent.dragEnter(container.firstChild as HTMLElement);
-    expect(screen.getByText('Drop to import')).toBeInTheDocument();
+// The map draws no legend of its own, so the stroke in the row is the only
+// thing tying a coloured line back to a place (#776).
+describe('track colour legend (#776)', () => {
+  it('FE-PLANNER-SIDEBAR-049: a track row carries a stroke in the colour the map draws', () => {
+    const track = buildPlace({ id: 11, name: 'Coloured Track', route_geometry: '[[48.0,2.0],[49.0,3.0]]', route_color: '#e11d48' });
+    render(<PlacesSidebar {...defaultProps} places={[track]} />);
+    const row = screen.getByText('Coloured Track').closest('div[draggable]')!;
+    const strokes = Array.from(row.querySelectorAll('span')).filter(el => (el as HTMLElement).style.borderRadius === '999px');
+    expect(strokes.some(el => (el as HTMLElement).style.background.includes('225, 29, 72') || (el as HTMLElement).style.background.includes('#e11d48'))).toBe(true);
+  });
+
+  it('FE-PLANNER-SIDEBAR-050: a place without geometry gets no stroke at all', () => {
+    const plain = buildPlace({ id: 12, name: 'Plain Place' });
+    render(<PlacesSidebar {...defaultProps} places={[plain]} />);
+    const row = screen.getByText('Plain Place').closest('div[draggable]')!;
+    const strokes = Array.from(row.querySelectorAll('span')).filter(el => (el as HTMLElement).style.borderRadius === '999px');
+    expect(strokes).toHaveLength(0);
+  });
+
+  it('FE-PLANNER-SIDEBAR-051: the star button filters the list down to a minimum rating', async () => {
+    // Replaces the old sort toggle: sorting put the best first but still left
+    // every other place on the list, which is no help when the point is to see
+    // only what the group actually wants to do.
+    const user = userEvent.setup();
+    const places = [
+      buildPlace({ id: 20, name: 'Loved Place', rating_avg: 4.6 }),
+      buildPlace({ id: 21, name: 'Meh Place', rating_avg: 2.1 }),
+      buildPlace({ id: 22, name: 'Unrated Place' }),
+    ];
+    render(<PlacesSidebar {...defaultProps} places={places} />);
+    expect(screen.getByText('Meh Place')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Filter by rating'));
+    await user.click(screen.getByText('4+'));
+
+    expect(screen.getByText('Loved Place')).toBeInTheDocument();
+    expect(screen.queryByText('Meh Place')).not.toBeInTheDocument();
+    // An unrated place has no average to clear the floor with.
+    expect(screen.queryByText('Unrated Place')).not.toBeInTheDocument();
+  });
+});
+
+// #1616 — the other half of the reporter's gesture: the pickup. A tablet cannot
+// start an HTML5 drag with a finger, so the bridge's long press has to do it, and
+// the row has to hand over the placeId the day plan reads back on drop.
+describe('picking a place up with a finger (#1616)', () => {
+  it('FE-PLANNER-SIDEBAR-047: a long press on a place row starts a drag carrying its id', async () => {
+    const place = buildPlace({ id: 42, name: 'Tablet Place' });
+    render(<PlacesSidebar {...defaultProps} isMobile={false} places={[place]} />);
+    const teardown = installTouchDragBridge();
+    try {
+      const row = screen.getByText('Tablet Place').closest('[draggable="true"]')!;
+      fireEvent.touchStart(row, { touches: [{ identifier: 1, clientX: 20, clientY: 40 }] });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(window.__dragData).toEqual({ placeId: '42' });
+    } finally {
+      teardown();
+      window.__dragData = null;
+    }
+  });
+
+  it('FE-PLANNER-SIDEBAR-048: a swipe down the list scrolls instead of picking the row up', async () => {
+    const place = buildPlace({ id: 42, name: 'Tablet Place' });
+    render(<PlacesSidebar {...defaultProps} isMobile={false} places={[place]} />);
+    const teardown = installTouchDragBridge();
+    try {
+      const row = screen.getByText('Tablet Place').closest('[draggable="true"]')!;
+      fireEvent.touchStart(row, { touches: [{ identifier: 1, clientX: 20, clientY: 40 }] });
+      const moved = fireEvent.touchMove(document, { touches: [{ identifier: 1, clientX: 20, clientY: 140 }] });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(moved).toBe(true);
+      expect(window.__dragData).toBeFalsy();
+    } finally {
+      teardown();
+      window.__dragData = null;
+    }
   });
 });

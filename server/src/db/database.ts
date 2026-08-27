@@ -1,25 +1,26 @@
-import { Category, Place, Tag } from '../types';
-import { runMigrations } from './migrations';
-import { loadAdditionalCategoriesByPlaceIds } from './placeCategories';
-import { createTables } from './schema';
-import { runSeeds } from './seeds';
-
 import Database from 'better-sqlite3';
-import fs from 'fs';
 import path from 'path';
+import fs from 'fs';
+import { readEnv } from '../app-config';
+import { applyDurabilityPragmas } from './durability';
+import { createTables } from './schema';
+import { runMigrations } from './migrations';
+import { runSeeds } from './seeds';
+import { Place, Tag } from '../types';
+import { loadAdditionalCategoriesByPlaceIds } from './placeCategories';
 
 // In test mode each vitest worker gets an isolated in-memory DB so that
 // parallel forks can't race on the same file or share migration state.
-const isTest = process.env.NODE_ENV === 'test';
+const isTest = readEnv().app.isTest;
 
 let dbPath: string;
 if (isTest) {
   dbPath = ':memory:';
-} else if (process.env.TREK_DB_FILE) {
+} else if (readEnv().db.trekDbFile) {
   // Explicit DB file (used by the Playwright E2E harness to run against an
   // isolated, throwaway database instead of the real data/travel.db). Purely
   // additive — when unset the default path below is used exactly as before.
-  dbPath = process.env.TREK_DB_FILE;
+  dbPath = readEnv().db.trekDbFile!;
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 } else {
@@ -34,19 +35,22 @@ let _db: Database.Database | null = null;
 
 function initDb(): void {
   if (_db) {
-    try {
-      _db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    } catch (e) {}
-    try {
-      _db.close();
-    } catch (e) {}
+    try { _db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
+    try { _db.close(); } catch (e) {}
     _db = null;
   }
 
   _db = new Database(dbPath);
-  _db.exec('PRAGMA journal_mode = WAL');
+  // Ahead of the journal switch now: changing journal_mode needs an exclusive
+  // lock, which a sibling process (reset-admin, the rotation script) may hold.
   _db.exec('PRAGMA busy_timeout = 5000');
+  const durability = applyDurabilityPragmas(_db);
   _db.exec('PRAGMA foreign_keys = ON');
+  // Reported so an operator can see whether their setting took — the test DB is
+  // :memory: and has no journal file, so there is nothing to report there.
+  if (dbPath !== ':memory:') {
+    console.log(`[DB] journal_mode=${durability.journalMode}, synchronous=${durability.synchronous}`);
+  }
 
   createTables(_db);
   runMigrations(_db);
@@ -68,7 +72,7 @@ const db = new Proxy({} as Database.Database, {
   },
 });
 
-if (process.env.DEMO_MODE?.toLowerCase() === 'true') {
+if (readEnv().demo.enabled) {
   try {
     const { seedDemoData } = require('../demo/demo-seed');
     seedDemoData(_db);
@@ -79,12 +83,8 @@ if (process.env.DEMO_MODE?.toLowerCase() === 'true') {
 
 function closeDb(): void {
   if (_db) {
-    try {
-      _db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    } catch (e) {}
-    try {
-      _db.close();
-    } catch (e) {}
+    try { _db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
+    try { _db.close(); } catch (e) {}
     _db = null;
     console.log('[DB] Database connection closed');
   }
@@ -103,52 +103,55 @@ interface PlaceWithCategory extends Place {
   category_icon: string | null;
 }
 
-export interface HydratedPlace extends Place {
-  category: Category | null;
-  additional_category_ids: number[];
-  additional_categories: Category[];
+interface PlaceWithTags extends Place {
+  category: { id: number; name: string; color: string; icon: string } | null;
   tags: Tag[];
+  ratings: { user_id: number; username: string; avatar: string | null; rating: number }[];
+  rating_avg: number | null;
+  rating_count: number;
 }
 
-function getPlaceWithTags(placeId: number | string): HydratedPlace | null {
-  const place = db
-    .prepare(
-      `
+function getPlaceWithTags(placeId: number | string): PlaceWithTags | null {
+  const place = db.prepare(`
     SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon
     FROM places p
     LEFT JOIN categories c ON p.category_id = c.id
     WHERE p.id = ?
-  `,
-    )
-    .get(placeId) as PlaceWithCategory | undefined;
+  `).get(placeId) as PlaceWithCategory | undefined;
 
   if (!place) return null;
 
-  const tags = db
-    .prepare(
-      `
+  const tags = db.prepare(`
     SELECT t.* FROM tags t
     JOIN place_tags pt ON t.id = pt.tag_id
     WHERE pt.place_id = ?
-  `,
-    )
-    .all(placeId) as Tag[];
+  `).all(placeId) as Tag[];
 
-  const additionalCategories = loadAdditionalCategoriesByPlaceIds(db, [place.id])[place.id];
+  // Collaborative ratings (#1435): every voter with username/avatar for the
+  // who-voted tooltip; the displayed value is the average.
+  const ratings = db.prepare(`
+    SELECT pr.user_id, u.username, u.avatar, pr.rating FROM place_ratings pr
+    JOIN users u ON pr.user_id = u.id
+    WHERE pr.place_id = ? ORDER BY pr.created_at
+  `).all(placeId) as { user_id: number; username: string; avatar: string | null; rating: number }[];
+
+  const additionalCategoriesByPlace = loadAdditionalCategoriesByPlaceIds(db, [Number(placeId)]);
+  const additionalCategories = additionalCategoriesByPlace[Number(placeId)] ?? [];
 
   return {
     ...place,
-    category: place.category_id
-      ? {
-          id: place.category_id,
-          name: place.category_name!,
-          color: place.category_color!,
-          icon: place.category_icon!,
-        }
-      : null,
-    additional_category_ids: additionalCategories.map(({ id }) => id),
+    category: place.category_id ? {
+      id: place.category_id,
+      name: place.category_name!,
+      color: place.category_color!,
+      icon: place.category_icon!,
+    } : null,
+    additional_category_ids: additionalCategories.map((category) => category.id),
     additional_categories: additionalCategories,
     tags,
+    ratings,
+    rating_avg: ratings.length > 0 ? ratings.reduce((s, r) => s + r.rating, 0) / ratings.length : null,
+    rating_count: ratings.length,
   };
 }
 
@@ -159,26 +162,17 @@ interface TripAccess {
 }
 
 function canAccessTrip(tripId: number | string, userId: number): TripAccess | undefined {
-  return db
-    .prepare(
-      `
+  return db.prepare(`
     SELECT t.id, t.user_id, t.currency FROM trips t
     LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ?
     WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)
-  `,
-    )
-    .get(userId, tripId, userId) as TripAccess | undefined;
+  `).get(userId, tripId, userId) as TripAccess | undefined;
 }
 
 function isOwner(tripId: number | string, userId: number): boolean {
   return !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId);
 }
 
-try {
-  const { backfillFlightEndpoints } = require('../services/airportService');
-  backfillFlightEndpoints();
-} catch (err) {
-  console.error('[DB] Flight endpoint backfill failed:', err);
-}
 
 export { db, closeDb, reinitialize, getPlaceWithTags, canAccessTrip, isOwner };
+export type { TripAccess, PlaceWithTags };

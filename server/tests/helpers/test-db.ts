@@ -15,13 +15,13 @@
  *   beforeEach(() => resetTestDb(testDb));
  *   afterAll(() => testDb.close());
  */
-import { runMigrations } from '../../src/db/migrations';
-import { createTables } from '../../src/db/schema';
-import { AuthPublicController } from '../../src/nest/auth/auth-public.controller';
-import type { RateLimitService } from '../../src/nest/auth/rate-limit.service';
-import type { INestApplication } from '@nestjs/common';
 
 import Database from 'better-sqlite3';
+import type { INestApplication } from '@nestjs/common';
+import { createTables } from '../../src/db/schema';
+import { runMigrations } from '../../src/db/migrations';
+import { AuthPublicController } from '../../src/nest/auth/auth-public.controller';
+import type { RateLimitService } from '../../src/nest/common/rate-limit.service';
 
 // Tables to clear on reset, child-before-parent to be safe (FK checks are OFF during reset).
 // Keep in sync with schema.ts + migrations.ts. Intentionally excluded: categories, addons,
@@ -42,8 +42,6 @@ const RESET_TABLES = [
   'day_assignments',
   // Places
   'place_regions',
-  'place_additional_categories',
-  'collection_place_additional_categories',
   'place_tags',
   'places',
   // Packing
@@ -73,6 +71,7 @@ const RESET_TABLES = [
   'trip_members',
   'trips',
   // Journey
+  'journey_books',
   'journey_share_tokens',
   'journey_photos',
   'journey_entries',
@@ -80,6 +79,8 @@ const RESET_TABLES = [
   'journey_trips',
   'journeys',
   // Vacay
+  'vacay_user_settings',
+  'vacay_shares',
   'vacay_entries',
   'vacay_company_holidays',
   'vacay_holiday_calendars',
@@ -104,6 +105,8 @@ const RESET_TABLES = [
   'invite_tokens',
   'tags',
   'app_settings',
+  'webauthn_challenges',
+  'webauthn_credentials',
   'users',
 ];
 
@@ -121,102 +124,64 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const DEFAULT_ADDONS = [
-  {
-    id: 'packing',
-    name: 'Packing List',
-    description: 'Pack your bags',
-    type: 'trip',
-    icon: 'ListChecks',
-    enabled: 1,
-    sort_order: 0,
-  },
-  {
-    id: 'budget',
-    name: 'Costs',
-    description: 'Track and split trip expenses',
-    type: 'trip',
-    icon: 'Wallet',
-    enabled: 1,
-    sort_order: 1,
-  },
-  {
-    id: 'documents',
-    name: 'Documents',
-    description: 'Manage travel documents',
-    type: 'trip',
-    icon: 'FileText',
-    enabled: 1,
-    sort_order: 2,
-  },
-  {
-    id: 'vacay',
-    name: 'Vacay',
-    description: 'Vacation day planner',
-    type: 'global',
-    icon: 'CalendarDays',
-    enabled: 1,
-    sort_order: 10,
-  },
-  {
-    id: 'atlas',
-    name: 'Atlas',
-    description: 'Visited countries map',
-    type: 'global',
-    icon: 'Globe',
-    enabled: 1,
-    sort_order: 11,
-  },
-  {
-    id: 'mcp',
-    name: 'MCP',
-    description: 'AI assistant integration',
-    type: 'integration',
-    icon: 'Terminal',
-    enabled: 0,
-    sort_order: 12,
-  },
-  {
-    id: 'naver_list_import',
-    name: 'Naver List Import',
-    description: 'Import places from shared Naver Maps lists',
-    type: 'trip',
-    icon: 'Link2',
-    enabled: 0,
-    sort_order: 13,
-  },
-  {
-    id: 'collab',
-    name: 'Collab',
-    description: 'Notes, polls, live chat',
-    type: 'trip',
-    icon: 'Users',
-    enabled: 1,
-    sort_order: 6,
-  },
+  { id: 'packing',   name: 'Packing List',    description: 'Pack your bags',            type: 'trip',        icon: 'ListChecks',  enabled: 1, sort_order: 0  },
+  { id: 'budget',    name: 'Costs',           description: 'Track and split trip expenses', type: 'trip',     icon: 'Wallet',      enabled: 1, sort_order: 1  },
+  { id: 'documents', name: 'Documents',       description: 'Manage travel documents',    type: 'trip',        icon: 'FileText',    enabled: 1, sort_order: 2  },
+  { id: 'vacay',     name: 'Vacay',           description: 'Vacation day planner',       type: 'global',      icon: 'CalendarDays',enabled: 1, sort_order: 10 },
+  { id: 'atlas',     name: 'Atlas',           description: 'Visited countries map',      type: 'global',      icon: 'Globe',       enabled: 1, sort_order: 11 },
+  { id: 'mcp',       name: 'MCP',             description: 'AI assistant integration',   type: 'integration', icon: 'Terminal',    enabled: 0, sort_order: 12 },
+  { id: 'naver_list_import', name: 'Naver List Import', description: 'Import places from shared Naver Maps lists', type: 'trip', icon: 'Link2', enabled: 0, sort_order: 13 },
+  { id: 'collab',    name: 'Collab',          description: 'Notes, polls, live chat',    type: 'trip',        icon: 'Users',       enabled: 1, sort_order: 6  },
 ];
 
 const DEFAULT_PHOTO_PROVIDERS = [
-  { id: 'immich', name: 'Immich', enabled: 1 },
-  { id: 'synologyphotos', name: 'Synology Photos', enabled: 1 },
+  { id: 'immich',         name: 'Immich',          enabled: 1 },
+  { id: 'synologyphotos', name: 'Synology Photos',  enabled: 1 },
 ];
+
+/**
+ * Flip an addon in the test DB.
+ *
+ * The MCP `when:` gates used to be mocked at the module boundary
+ * (`vi.mock('addons.bridge')`), which worked only because the gate closed over
+ * a module-level singleton. They read their controller's injected AddonsService
+ * now, so a test toggles the same row the admin panel writes — which also means
+ * these cases exercise the real read instead of a stub of it.
+ *
+ * `resetTestDb` deliberately leaves the addons table alone, so a toggle
+ * survives into the next case: set what a case needs rather than assuming the
+ * seeded default.
+ */
+export function setAddonEnabled(db: Database.Database, addonId: string, enabled: boolean): void {
+  db.prepare(
+    'INSERT INTO addons (id, name, type, enabled) VALUES (?, ?, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled',
+  ).run(addonId, addonId, 'global', enabled ? 1 : 0);
+}
+
+/** Collab's sub-feature flags are opt-out app_settings, not addon rows. */
+export function setCollabFeature(
+  db: Database.Database,
+  feature: 'chat' | 'notes' | 'polls' | 'whatsnext',
+  enabled: boolean,
+): void {
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)").run(
+    `collab_${feature}_enabled`,
+    enabled ? 'true' : 'false',
+  );
+}
 
 function seedDefaults(db: Database.Database): void {
   const insertCat = db.prepare('INSERT OR IGNORE INTO categories (name, color, icon) VALUES (?, ?, ?)');
   for (const cat of DEFAULT_CATEGORIES) insertCat.run(cat.name, cat.color, cat.icon);
 
-  const insertAddon = db.prepare(
-    'INSERT OR IGNORE INTO addons (id, name, description, type, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  );
+  const insertAddon = db.prepare('INSERT OR IGNORE INTO addons (id, name, description, type, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
   for (const a of DEFAULT_ADDONS) insertAddon.run(a.id, a.name, a.description, a.type, a.icon, a.enabled, a.sort_order);
 
   try {
-    const insertProvider = db.prepare(
-      'INSERT OR IGNORE INTO photo_providers (id, name, description, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-    );
+    const insertProvider = db.prepare('INSERT OR IGNORE INTO photo_providers (id, name, description, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)');
     for (const p of DEFAULT_PHOTO_PROVIDERS) insertProvider.run(p.id, p.name, p.id, 'Image', p.enabled, 0);
-  } catch {
-    /* table may not exist in very old schemas */
-  }
+  } catch { /* table may not exist in very old schemas */ }
 }
 
 /**
@@ -241,7 +206,7 @@ export function createTestDb(): Database.Database {
 export function resetTestDb(db: Database.Database): void {
   db.exec('PRAGMA foreign_keys = OFF');
   const existingTables = new Set(
-    (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((r) => r.name),
+    (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(r => r.name)
   );
   for (const table of RESET_TABLES) {
     if (existingTables.has(table)) {
@@ -251,6 +216,20 @@ export function resetTestDb(db: Database.Database): void {
   db.exec('PRAGMA foreign_keys = ON');
   seedDefaults(db);
 }
+
+/**
+ * Byte-for-byte the statement in src/db/database.ts.
+ *
+ * Exported because the same query is copied into ~90 test files, and every one
+ * of those copies had dropped `t.currency` — so the budget domain, which reads
+ * exactly that column off the access row, was only ever exercising its 'EUR'
+ * fallback. Import this instead of retyping it.
+ */
+export const CAN_ACCESS_TRIP_SQL = `
+        SELECT t.id, t.user_id, t.currency FROM trips t
+        LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ?
+        WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)
+      `;
 
 /**
  * Returns the mock factory for vi.mock('../../src/db/database', ...).
@@ -274,64 +253,34 @@ export function buildDbMock(testDb: Database.Database) {
         category_icon: string | null;
         [key: string]: unknown;
       }
-      const place = testDb
-        .prepare(
-          `
+      const place = testDb.prepare(`
         SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon
         FROM places p
         LEFT JOIN categories c ON p.category_id = c.id
         WHERE p.id = ?
-      `,
-        )
-        .get(placeId) as PlaceRow | undefined;
+      `).get(placeId) as PlaceRow | undefined;
 
       if (!place) return null;
 
-      const tags = testDb
-        .prepare(
-          `
+      const tags = testDb.prepare(`
         SELECT t.* FROM tags t
         JOIN place_tags pt ON t.id = pt.tag_id
         WHERE pt.place_id = ?
-      `,
-        )
-        .all(placeId);
-
-      const additionalCategories = testDb
-        .prepare(
-          `SELECT c.id, c.name, c.color, c.icon
-           FROM place_additional_categories pac
-           JOIN categories c ON c.id = pac.category_id
-           WHERE pac.place_id = ?
-           ORDER BY c.name, c.id`,
-        )
-        .all(placeId) as Array<{ id: number; name: string; color: string; icon: string }>;
+      `).all(placeId);
 
       return {
         ...place,
-        category: place.category_id
-          ? {
-              id: place.category_id,
-              name: place.category_name,
-              color: place.category_color,
-              icon: place.category_icon,
-            }
-          : null,
-        additional_category_ids: additionalCategories.map(({ id }) => id),
-        additional_categories: additionalCategories,
+        category: place.category_id ? {
+          id: place.category_id,
+          name: place.category_name,
+          color: place.category_color,
+          icon: place.category_icon,
+        } : null,
         tags,
       };
     },
     canAccessTrip: (tripId: number | string, userId: number) => {
-      return testDb
-        .prepare(
-          `
-        SELECT t.id, t.user_id FROM trips t
-        LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ?
-        WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)
-      `,
-        )
-        .get(userId, tripId, userId);
+      return testDb.prepare(CAN_ACCESS_TRIP_SQL).get(userId, tripId, userId);
     },
     isOwner: (tripId: number | string, userId: number) => {
       return !!testDb.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId);
@@ -363,4 +312,7 @@ export const TEST_CONFIG = {
   SESSION_DURATION: '24h',
   SESSION_DURATION_MS: 86400000,
   SESSION_DURATION_SECONDS: 86400,
+  SESSION_DURATION_REMEMBER: '30d',
+  SESSION_DURATION_REMEMBER_MS: 2592000000,
+  SESSION_DURATION_REMEMBER_SECONDS: 2592000,
 };

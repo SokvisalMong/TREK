@@ -154,11 +154,24 @@ function createTables(db: Database.Database): void {
       category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
       PRIMARY KEY (place_id, category_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_place
+      ON place_additional_categories(place_id);
+    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_category
+      ON place_additional_categories(category_id);
 
     CREATE TABLE IF NOT EXISTS place_tags (
       place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE,
       tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
       PRIMARY KEY (place_id, tag_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS place_ratings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rating INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(place_id, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS day_assignments (
@@ -311,6 +324,7 @@ function createTables(db: Database.Database): void {
       block_weekends INTEGER DEFAULT 1,
       holidays_enabled INTEGER DEFAULT 0,
       holidays_region TEXT DEFAULT '',
+      school_holidays_enabled INTEGER DEFAULT 0,
       company_holidays_enabled INTEGER DEFAULT 1,
       carry_over_enabled INTEGER DEFAULT 1,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -371,6 +385,7 @@ function createTables(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS vacay_holiday_calendars (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       plan_id   INTEGER NOT NULL REFERENCES vacay_plans(id) ON DELETE CASCADE,
+      type      TEXT NOT NULL DEFAULT 'public_holiday',
       region    TEXT NOT NULL,
       label     TEXT,
       color     TEXT NOT NULL DEFAULT '#fecaca',
@@ -436,6 +451,19 @@ function createTables(db: Database.Database): void {
       category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
       PRIMARY KEY (collection_place_id, category_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_place
+      ON collection_place_additional_categories(collection_place_id);
+    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_category
+      ON collection_place_additional_categories(category_id);
+
+    CREATE TABLE IF NOT EXISTS collection_place_ratings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      collection_place_id INTEGER NOT NULL REFERENCES collection_places(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      rating INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(collection_place_id, user_id)
+    );
 
     CREATE TABLE IF NOT EXISTS collection_place_tags (
       collection_place_id INTEGER NOT NULL REFERENCES collection_places(id) ON DELETE CASCADE,
@@ -447,10 +475,6 @@ function createTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_collection_members_user ON collection_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_collection_place_tags_place ON collection_place_tags(collection_place_id);
     CREATE INDEX IF NOT EXISTS idx_collection_place_tags_tag ON collection_place_tags(tag_id);
-    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_place
-      ON collection_place_additional_categories(collection_place_id);
-    CREATE INDEX IF NOT EXISTS idx_collection_place_additional_categories_category
-      ON collection_place_additional_categories(category_id);
 
     -- Per-collection custom labels (distinct from the instance-wide tags table):
     -- each list defines its own labels and every place can carry several.
@@ -544,10 +568,6 @@ function createTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_day_assignments_place_id ON day_assignments(place_id);
     CREATE INDEX IF NOT EXISTS idx_place_tags_place_id ON place_tags(place_id);
     CREATE INDEX IF NOT EXISTS idx_place_tags_tag_id ON place_tags(tag_id);
-    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_place
-      ON place_additional_categories(place_id);
-    CREATE INDEX IF NOT EXISTS idx_place_additional_categories_category
-      ON place_additional_categories(category_id);
     CREATE INDEX IF NOT EXISTS idx_trip_members_trip_id ON trip_members(trip_id);
     CREATE INDEX IF NOT EXISTS idx_trip_members_user_id ON trip_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_packing_items_trip_id ON packing_items(trip_id);

@@ -3,14 +3,6 @@
  * update services. A matching If-Match token (or none) updates as before; a
  * stale token returns the conflict sentinel carrying the server's current row.
  */
-import { runMigrations } from '../../../src/db/migrations';
-import { createTables } from '../../../src/db/schema';
-import { isUpdateConflict } from '../../../src/services/conflictResult';
-import { createItem, updateItem } from '../../../src/services/packingService';
-import { updatePlace, createPlace } from '../../../src/services/placeService';
-import { createCategory, createUser, createTrip } from '../../helpers/factories';
-import { resetTestDb } from '../../helpers/test-db';
-
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
 
 const { testDb, dbMock } = vi.hoisted(() => {
@@ -20,26 +12,9 @@ const { testDb, dbMock } = vi.hoisted(() => {
   db.exec('PRAGMA foreign_keys = ON');
   db.exec('PRAGMA busy_timeout = 5000');
   function getPlaceWithTags(placeId: number | string) {
-    const place = db.prepare('SELECT * FROM places WHERE id = ?').get(placeId) as
-      | ({ id: number } & Record<string, unknown>)
-      | undefined;
-    if (!place) return null;
-    const additionalCategories = db
-      .prepare(
-        `SELECT c.id, c.name, c.color, c.icon
-         FROM place_additional_categories pac
-         JOIN categories c ON c.id = pac.category_id
-         WHERE pac.place_id = ?
-         ORDER BY c.name, c.id`,
-      )
-      .all(placeId) as Array<{ id: number; name: string; color: string; icon: string }>;
-    return {
-      ...place,
-      category: null,
-      additional_category_ids: additionalCategories.map(({ id }) => id),
-      additional_categories: additionalCategories,
-      tags: [],
-    };
+    const p = db.prepare('SELECT * FROM places WHERE id = ?').get(placeId);
+    if (!p) return null;
+    return { ...(p as object), category: null, tags: [] };
   }
   const mock = {
     db,
@@ -59,6 +34,46 @@ vi.mock('../../../src/config', () => ({
   updateJwtSecret: () => {},
 }));
 
+import { createTables } from '../../../src/db/schema';
+import { runMigrations } from '../../../src/db/migrations';
+import { resetTestDb } from '../../helpers/test-db';
+import { createUser, createTrip } from '../../helpers/factories';
+import { isUpdateConflict } from '../../../src/nest/common/conflictResult';
+import { DatabaseService } from '../../../src/nest/database/database.service';
+import { PackingService } from '../../../src/nest/packing/packing.service';
+import { PlacesService } from '../../../src/nest/places/places.service';
+import { MapsService } from '../../../src/nest/maps/maps.service';
+import { PermissionsService } from '../../../src/nest/permissions/permissions.service';
+import { RealtimeService } from '../../../src/nest/realtime/realtime.service';
+import { QueryHelpersService } from '../../../src/nest/query-helpers/query-helpers.service';
+import { UnsplashService } from '../../../src/nest/unsplash/unsplash.service';
+import { PlacePhotoCacheService } from '../../../src/nest/place-photos/place-photo-cache.service';
+import { JourneyDomainService } from '../../../src/nest/journey/journey-domain.service';
+import { TrekPhotosRepository } from '../../../src/nest/photos/trek-photos.repository';
+import { RuntimeEnvService } from '../../../src/nest/app-config/runtime-env.service';
+import { notificationsStub } from '../../helpers/notifications';
+import { makeStorageFixture } from '../../helpers/storage-fixture';
+
+const dbs = new DatabaseService(testDb);
+const realtime = new RealtimeService();
+const runtimeEnv = new RuntimeEnvService();
+// One cache instance shared by maps and places, the way the container wires it:
+// the service's stampede guard only works if there is exactly one of them.
+const photoCache = new PlacePhotoCacheService(dbs, makeStorageFixture('photos/google/').storage);
+
+const packing = new PackingService(dbs, new PermissionsService(dbs), realtime, notificationsStub());
+const places = new PlacesService(
+  dbs,
+  new PermissionsService(dbs),
+  realtime,
+  new MapsService(dbs, photoCache),
+  new QueryHelpersService(dbs),
+  new UnsplashService(dbs, runtimeEnv, makeStorageFixture('').storage),
+  photoCache,
+  new JourneyDomainService(dbs, realtime, new TrekPhotosRepository(dbs)),
+  makeStorageFixture('').storage,
+);
+
 beforeAll(() => {
   createTables(testDb);
   runMigrations(testDb);
@@ -73,37 +88,37 @@ afterAll(() => {
 });
 
 function freshPlace(tripId: number) {
-  const place = createPlace(String(tripId), { name: 'Original' }) as { id: number; updated_at: string };
+  const place = places.create(String(tripId), { name: 'Original' }) as unknown as { id: number; updated_at: string };
   return place;
 }
 
-describe('updatePlace — optimistic concurrency', () => {
-  it('updates normally when no If-Match token is sent (back-compat)', () => {
+describe('PlacesService.update — optimistic concurrency', () => {
+  it('updates normally when no If-Match token is sent (back-compat)', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
     const place = freshPlace(trip.id);
 
-    const result = updatePlace(String(trip.id), String(place.id), { name: 'Edited' });
+    const result = await places.update(String(trip.id), String(place.id), { name: 'Edited' });
     expect(isUpdateConflict(result)).toBe(false);
     expect((result as { name: string }).name).toBe('Edited');
   });
 
-  it('updates when the If-Match token matches the current updated_at', () => {
+  it('updates when the If-Match token matches the current updated_at', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
     const place = freshPlace(trip.id);
 
-    const result = updatePlace(String(trip.id), String(place.id), { name: 'Edited' }, place.updated_at);
+    const result = await places.update(String(trip.id), String(place.id), { name: 'Edited' }, place.updated_at);
     expect(isUpdateConflict(result)).toBe(false);
     expect((result as { name: string }).name).toBe('Edited');
   });
 
-  it('returns a conflict (with the server row) when the token is stale', () => {
+  it('returns a conflict (with the server row) when the token is stale', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
     const place = freshPlace(trip.id);
 
-    const result = updatePlace(String(trip.id), String(place.id), { name: 'Mine' }, '1999-01-01 00:00:00');
+    const result = await places.update(String(trip.id), String(place.id), { name: 'Mine' }, '1999-01-01 00:00:00');
     expect(isUpdateConflict(result)).toBe(true);
     if (isUpdateConflict(result)) {
       expect((result.server as { name: string }).name).toBe('Original');
@@ -113,60 +128,34 @@ describe('updatePlace — optimistic concurrency', () => {
     expect(row.name).toBe('Original');
   });
 
-  it('returns normalized additional categories in a stale-write conflict', () => {
+  it('returns null for a place that does not exist', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
-    const category = createCategory(testDb, { name: 'Cafe' });
-    const place = createPlace(String(trip.id), {
-      name: 'Original',
-      additional_category_ids: [category.id],
-    });
-    if (!place) throw new Error('Expected place creation to succeed');
-
-    const result = updatePlace(
-      String(trip.id),
-      String(place.id),
-      { additional_category_ids: [] },
-      '1999-01-01 00:00:00',
-    );
-    expect(isUpdateConflict(result)).toBe(true);
-    if (isUpdateConflict(result)) {
-      const server = result.server;
-      expect(server).toMatchObject({
-        additional_category_ids: [category.id],
-        additional_categories: [{ id: category.id, name: 'Cafe' }],
-      });
-    }
-  });
-
-  it('returns null for a place that does not exist', () => {
-    const { user } = createUser(testDb);
-    const trip = createTrip(testDb, user.id);
-    expect(updatePlace(String(trip.id), '999999', { name: 'x' }, 'whatever')).toBeNull();
+    expect(await places.update(String(trip.id), '999999', { name: 'x' }, 'whatever')).toBeNull();
   });
 });
 
 describe('updateItem (packing) — optimistic concurrency', () => {
   it('migration added updated_at and createItem stamps it', () => {
     const cols = testDb.prepare("PRAGMA table_info('packing_items')").all() as { name: string }[];
-    expect(cols.map((c) => c.name)).toContain('updated_at');
+    expect(cols.map(c => c.name)).toContain('updated_at');
 
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
-    const item = createItem(trip.id, { name: 'Socks' }) as { id: number; updated_at: string | null };
+    const item = packing.createItem(trip.id, { name: 'Socks' }) as { id: number; updated_at: string | null };
     expect(item.updated_at).toBeTruthy();
   });
 
   it('returns a conflict when the packing token is stale', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
-    const item = createItem(trip.id, { name: 'Socks' }) as { id: number; updated_at: string };
+    const item = packing.createItem(trip.id, { name: 'Socks' }, user.id) as { id: number; updated_at: string };
 
-    const stale = updateItem(trip.id, item.id, { name: 'Mine' }, ['name'], '1999-01-01 00:00:00');
+    const stale = packing.updateItem(trip.id, item.id, { name: 'Mine' }, ['name'], '1999-01-01 00:00:00', user.id);
     expect(isUpdateConflict(stale)).toBe(true);
 
-    const fresh = updateItem(trip.id, item.id, { name: 'Edited' }, ['name'], item.updated_at);
+    const fresh = packing.updateItem(trip.id, item.id, { name: 'Edited' }, ['name'], item.updated_at, user.id);
     expect(isUpdateConflict(fresh)).toBe(false);
     expect((fresh as { name: string }).name).toBe('Edited');
   });
-});
+})

@@ -2,32 +2,10 @@
  * Trips API integration tests.
  * Covers TRIP-001 through TRIP-022.
  */
-import { buildApp } from '../../src/bootstrap';
-import { runMigrations } from '../../src/db/migrations';
-import { createTables } from '../../src/db/schema';
-import { invalidatePermissionsCache } from '../../src/services/permissions';
-import { authCookie } from '../helpers/auth';
-import {
-  addTripMember,
-  createAdmin,
-  createBudgetItem,
-  createCategory,
-  createDayAccommodation,
-  createDayAssignment,
-  createDayNote,
-  createPackingItem,
-  createPlace,
-  createReservation,
-  createTag,
-  createTrip,
-  createUser,
-} from '../helpers/factories';
-import { resetTestDb, resetRateLimits } from '../helpers/test-db';
-import type { INestApplication } from '@nestjs/common';
-
-import type { Application } from 'express';
-import request from 'supertest';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import request from 'supertest';
+import type { Application } from 'express';
+import type { INestApplication } from '@nestjs/common';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 1: Bare in-memory DB — schema applied in beforeAll after mocks register
@@ -44,32 +22,16 @@ const { testDb, dbMock } = vi.hoisted(() => {
     closeDb: () => {},
     reinitialize: () => {},
     getPlaceWithTags: (placeId: number) => {
-      const place: any = db
-        .prepare(
-          `
+      const place: any = db.prepare(`
         SELECT p.*, c.name as category_name, c.color as category_color, c.icon as category_icon
         FROM places p LEFT JOIN categories c ON p.category_id = c.id WHERE p.id = ?
-      `,
-        )
-        .get(placeId);
+      `).get(placeId);
       if (!place) return null;
-      const tags = db
-        .prepare(`SELECT t.* FROM tags t JOIN place_tags pt ON t.id = pt.tag_id WHERE pt.place_id = ?`)
-        .all(placeId);
-      return {
-        ...place,
-        category: place.category_id
-          ? { id: place.category_id, name: place.category_name, color: place.category_color, icon: place.category_icon }
-          : null,
-        tags,
-      };
+      const tags = db.prepare(`SELECT t.* FROM tags t JOIN place_tags pt ON t.id = pt.tag_id WHERE pt.place_id = ?`).all(placeId);
+      return { ...place, category: place.category_id ? { id: place.category_id, name: place.category_name, color: place.category_color, icon: place.category_icon } : null, tags };
     },
     canAccessTrip: (tripId: any, userId: number) =>
-      db
-        .prepare(
-          `SELECT t.id, t.user_id FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)`,
-        )
-        .get(userId, tripId, userId),
+      db.prepare(`SELECT t.id, t.user_id FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)`).get(userId, tripId, userId),
     isOwner: (tripId: any, userId: number) =>
       !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId),
   };
@@ -88,6 +50,14 @@ vi.mock('../../src/config', () => ({
   DEFAULT_LANGUAGE: 'en',
 }));
 vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.fn() }));
+
+import { buildApp } from '../../src/bootstrap';
+import { createTables } from '../../src/db/schema';
+import { runMigrations } from '../../src/db/migrations';
+import { resetTestDb, resetRateLimits } from '../helpers/test-db';
+import { createUser, createAdmin, createTrip, addTripMember, createPlace, createReservation, createTag, createDayAccommodation, createBudgetItem, createPackingItem, createDayNote, createDayAssignment } from '../helpers/factories';
+import { authCookie } from '../helpers/auth';
+import { invalidatePermissionsCache } from '../../src/nest/permissions/permissions-cache';
 
 let nestApp: INestApplication;
 let app: Application;
@@ -146,9 +116,7 @@ describe('Create trip', () => {
     expect(res.body.trip.end_date).toBeNull();
 
     // Should have 7 dateless placeholder days
-    const days = testDb
-      .prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number')
-      .all(res.body.trip.id) as any[];
+    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(res.body.trip.id) as any[];
     expect(days).toHaveLength(7);
     expect(days[0].date).toBeNull();
   });
@@ -215,7 +183,10 @@ describe('Create trip', () => {
     testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('perm_trip_create', 'admin')").run();
     invalidatePermissionsCache();
 
-    const res = await request(app).post('/api/trips').set('Cookie', authCookie(admin.id)).send({ title: 'Admin Trip' });
+    const res = await request(app)
+      .post('/api/trips')
+      .set('Cookie', authCookie(admin.id))
+      .send({ title: 'Admin Trip' });
 
     expect(res.status).toBe(201);
   });
@@ -243,14 +214,18 @@ describe('List trips', () => {
     // Add member to one of stranger's trips
     addTripMember(testDb, memberTrip.id, member.id);
 
-    const ownerRes = await request(app).get('/api/trips').set('Cookie', authCookie(owner.id));
+    const ownerRes = await request(app)
+      .get('/api/trips')
+      .set('Cookie', authCookie(owner.id));
 
     expect(ownerRes.status).toBe(200);
     const ownerTripIds = ownerRes.body.trips.map((t: any) => t.id);
     expect(ownerTripIds).toContain(ownTrip.id);
     expect(ownerTripIds).not.toContain(memberTrip.id);
 
-    const memberRes = await request(app).get('/api/trips').set('Cookie', authCookie(member.id));
+    const memberRes = await request(app)
+      .get('/api/trips')
+      .set('Cookie', authCookie(member.id));
 
     expect(memberRes.status).toBe(200);
     const memberTripIds = memberRes.body.trips.map((t: any) => t.id);
@@ -267,7 +242,9 @@ describe('List trips', () => {
     // Archive the second trip directly in the DB
     testDb.prepare('UPDATE trips SET is_archived = 1 WHERE id = ?').run(archivedTrip.id);
 
-    const res = await request(app).get('/api/trips').set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get('/api/trips')
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(200);
     const tripIds = res.body.trips.map((t: any) => t.id);
@@ -283,7 +260,9 @@ describe('List trips', () => {
 
     testDb.prepare('UPDATE trips SET is_archived = 1 WHERE id = ?').run(archivedTrip.id);
 
-    const res = await request(app).get('/api/trips?archived=1').set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get('/api/trips?archived=1')
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(200);
     const tripIds = res.body.trips.map((t: any) => t.id);
@@ -301,7 +280,9 @@ describe('Get trip', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'My Trip', description: 'A lovely trip' });
 
-    const res = await request(app).get(`/api/trips/${trip.id}`).set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(200);
     expect(res.body.trip).toBeDefined();
@@ -315,11 +296,14 @@ describe('Get trip', () => {
     const { user: other } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: "Owner's Trip" });
 
-    const res = await request(app).get(`/api/trips/${trip.id}`).set('Cookie', authCookie(other.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(other.id));
 
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
   });
+
 
   it('TRIP-017 — Member can access trip → 200', async () => {
     const { user: owner } = createUser(testDb);
@@ -327,7 +311,9 @@ describe('Get trip', () => {
     const trip = createTrip(testDb, owner.id, { title: 'Shared Trip' });
     addTripMember(testDb, trip.id, member.id);
 
-    const res = await request(app).get(`/api/trips/${trip.id}`).set('Cookie', authCookie(member.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(member.id));
 
     expect(res.status).toBe(200);
     expect(res.body.trip.id).toBe(trip.id);
@@ -337,7 +323,9 @@ describe('Get trip', () => {
   it('TRIP-006 — GET /api/trips/:id for non-existent trip returns 404', async () => {
     const { user } = createUser(testDb);
 
-    const res = await request(app).get('/api/trips/999999').set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get('/api/trips/999999')
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(404);
   });
@@ -375,7 +363,9 @@ describe('Update trip', () => {
     expect(archiveRes.body.trip.is_archived).toBe(1);
 
     // Should not appear in the normal list
-    const listRes = await request(app).get('/api/trips').set('Cookie', authCookie(user.id));
+    const listRes = await request(app)
+      .get('/api/trips')
+      .set('Cookie', authCookie(user.id));
 
     const tripIds = listRes.body.trips.map((t: any) => t.id);
     expect(tripIds).not.toContain(trip.id);
@@ -398,7 +388,9 @@ describe('Update trip', () => {
     expect(unarchiveRes.body.trip.is_archived).toBe(0);
 
     // Should appear in the normal list again
-    const listRes = await request(app).get('/api/trips').set('Cookie', authCookie(user.id));
+    const listRes = await request(app)
+      .get('/api/trips')
+      .set('Cookie', authCookie(user.id));
 
     const tripIds = listRes.body.trips.map((t: any) => t.id);
     expect(tripIds).toContain(trip.id);
@@ -456,10 +448,7 @@ describe('Update trip', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { start_date: '2026-08-01', end_date: '2026-08-05' });
 
-    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as {
-      id: number;
-      date: string;
-    }[];
+    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string }[];
     expect(days).toHaveLength(5);
 
     const place = createPlace(testDb, trip.id);
@@ -474,28 +463,15 @@ describe('Update trip', () => {
 
     expect(res.status).toBe(200);
 
-    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as {
-      id: number;
-      date: string | null;
-    }[];
+    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string | null }[];
     expect(daysAfter).toHaveLength(5);
-    expect(daysAfter.map((d) => d.date)).toEqual([
-      '2026-08-11',
-      '2026-08-12',
-      '2026-08-13',
-      '2026-08-14',
-      '2026-08-15',
-    ]);
+    expect(daysAfter.map(d => d.date)).toEqual(['2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14', '2026-08-15']);
 
-    const assignmentsAfter = testDb.prepare('SELECT * FROM day_assignments WHERE id = ?').get(assignment.id) as
-      | { day_id: number }
-      | undefined;
+    const assignmentsAfter = testDb.prepare('SELECT * FROM day_assignments WHERE id = ?').get(assignment.id) as { day_id: number } | undefined;
     expect(assignmentsAfter).toBeDefined();
     expect(assignmentsAfter!.day_id).toBe(daysAfter[0].id);
 
-    const notesAfter = testDb.prepare('SELECT * FROM day_notes WHERE id = ?').get(note.id) as
-      | { day_id: number }
-      | undefined;
+    const notesAfter = testDb.prepare('SELECT * FROM day_notes WHERE id = ?').get(note.id) as { day_id: number } | undefined;
     expect(notesAfter).toBeDefined();
     expect(notesAfter!.day_id).toBe(daysAfter[1].id);
   });
@@ -504,9 +480,7 @@ describe('Update trip', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { start_date: '2026-09-01', end_date: '2026-09-05' });
 
-    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as {
-      id: number;
-    }[];
+    const days = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number }[];
     const place = createPlace(testDb, trip.id);
     const a4 = createDayAssignment(testDb, days[3].id, place.id);
     const a5 = createDayAssignment(testDb, days[4].id, place.id);
@@ -519,17 +493,12 @@ describe('Update trip', () => {
 
     expect(res.status).toBe(200);
 
-    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as {
-      id: number;
-      date: string | null;
-    }[];
+    const daysAfter = testDb.prepare('SELECT * FROM days WHERE trip_id = ? ORDER BY day_number').all(trip.id) as { id: number; date: string | null }[];
     expect(daysAfter).toHaveLength(3);
-    expect(daysAfter.every((d) => d.date !== null)).toBe(true);
+    expect(daysAfter.every(d => d.date !== null)).toBe(true);
 
     // Overflow days and their assignments deleted
-    const all = testDb.prepare('SELECT * FROM day_assignments WHERE id IN (?, ?)').all(a4.id, a5.id) as {
-      id: number;
-    }[];
+    const all = testDb.prepare('SELECT * FROM day_assignments WHERE id IN (?, ?)').all(a4.id, a5.id) as { id: number }[];
     expect(all).toHaveLength(0);
   });
 });
@@ -543,26 +512,34 @@ describe('Delete trip', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'To Delete' });
 
-    const deleteRes = await request(app).delete(`/api/trips/${trip.id}`).set('Cookie', authCookie(user.id));
+    const deleteRes = await request(app)
+      .delete(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id));
 
     expect(deleteRes.status).toBe(200);
     expect(deleteRes.body.success).toBe(true);
 
     // Trip should no longer be accessible
-    const getRes = await request(app).get(`/api/trips/${trip.id}`).set('Cookie', authCookie(user.id));
+    const getRes = await request(app)
+      .get(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id));
 
     expect(getRes.status).toBe(404);
   });
 
-  it('TRIP-019 — Regular user cannot delete another users trip → 403', async () => {
+  it('TRIP-019 — Regular user cannot delete another users trip → 404', async () => {
     const { user: owner } = createUser(testDb);
     const { user: other } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: "Owner's Trip" });
 
-    const res = await request(app).delete(`/api/trips/${trip.id}`).set('Cookie', authCookie(other.id));
+    const res = await request(app)
+      .delete(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(other.id));
 
-    // getTripOwner finds the trip (it exists); checkPermission fails for non-members → 403
-    expect(res.status).toBe(403);
+    // 404, not 403: someone with no access at all must not be able to tell an
+    // existing trip from a missing one by walking sequential ids. A member who
+    // simply lacks trip_delete still gets 403 — see the case below.
+    expect(res.status).toBe(404);
 
     // Trip still exists
     const tripInDb = testDb.prepare('SELECT id FROM trips WHERE id = ?').get(trip.id);
@@ -575,7 +552,9 @@ describe('Delete trip', () => {
     const trip = createTrip(testDb, owner.id, { title: 'Shared Trip' });
     addTripMember(testDb, trip.id, member.id);
 
-    const res = await request(app).delete(`/api/trips/${trip.id}`).set('Cookie', authCookie(member.id));
+    const res = await request(app)
+      .delete(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(member.id));
 
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/permission/i);
@@ -589,7 +568,9 @@ describe('Delete trip', () => {
     createPlace(testDb, trip.id, { name: 'Eiffel Tower' });
     createReservation(testDb, trip.id, { title: 'Hotel Booking', type: 'hotel' });
 
-    const deleteRes = await request(app).delete(`/api/trips/${trip.id}`).set('Cookie', authCookie(user.id));
+    const deleteRes = await request(app)
+      .delete(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(user.id));
 
     expect(deleteRes.status).toBe(200);
     expect(deleteRes.body.success).toBe(true);
@@ -607,7 +588,9 @@ describe('Delete trip', () => {
     const { user: owner } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: "User's Trip" });
 
-    const res = await request(app).delete(`/api/trips/${trip.id}`).set('Cookie', authCookie(admin.id));
+    const res = await request(app)
+      .delete(`/api/trips/${trip.id}`)
+      .set('Cookie', authCookie(admin.id));
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -616,7 +599,9 @@ describe('Delete trip', () => {
   it('TRIP-018 — DELETE /api/trips/:id for non-existent trip returns 404', async () => {
     const { user } = createUser(testDb);
 
-    const res = await request(app).delete('/api/trips/999999').set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .delete('/api/trips/999999')
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(404);
   });
@@ -633,7 +618,9 @@ describe('Trip members', () => {
     const trip = createTrip(testDb, owner.id, { title: 'Team Trip' });
     addTripMember(testDb, trip.id, member.id);
 
-    const res = await request(app).get(`/api/trips/${trip.id}/members`).set('Cookie', authCookie(owner.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/members`)
+      .set('Cookie', authCookie(owner.id));
 
     expect(res.status).toBe(200);
     expect(res.body.owner).toBeDefined();
@@ -659,9 +646,7 @@ describe('Trip members', () => {
     expect(res.body.member.role).toBe('member');
 
     // Verify in DB
-    const dbEntry = testDb
-      .prepare('SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?')
-      .get(trip.id, invitee.id);
+    const dbEntry = testDb.prepare('SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?').get(trip.id, invitee.id);
     expect(dbEntry).toBeDefined();
   });
 
@@ -735,9 +720,7 @@ describe('Trip members', () => {
     expect(res.body.success).toBe(true);
 
     // Verify removal in DB
-    const dbEntry = testDb
-      .prepare('SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?')
-      .get(trip.id, member.id);
+    const dbEntry = testDb.prepare('SELECT * FROM trip_members WHERE trip_id = ? AND user_id = ?').get(trip.id, member.id);
     expect(dbEntry).toBeUndefined();
   });
 
@@ -771,9 +754,7 @@ describe('Trip members', () => {
 
     const row = testDb.prepare('SELECT user_id FROM trips WHERE id = ?').get(trip.id) as { user_id: number };
     expect(row.user_id).toBe(member.id);
-    const memberRows = (
-      testDb.prepare('SELECT user_id FROM trip_members WHERE trip_id = ?').all(trip.id) as { user_id: number }[]
-    ).map((r) => r.user_id);
+    const memberRows = (testDb.prepare('SELECT user_id FROM trip_members WHERE trip_id = ?').all(trip.id) as { user_id: number }[]).map(r => r.user_id);
     expect(memberRows).toContain(owner.id);
     expect(memberRows).not.toContain(member.id);
   });
@@ -839,8 +820,8 @@ describe('Trip members', () => {
     const tripA = createTrip(testDb, owner.id, { title: 'Trip A' });
     const tripB = createTrip(testDb, owner.id, { title: 'Trip B' });
 
-    const addJake = (tripId: number) =>
-      request(app).post(`/api/trips/${tripId}/guests`).set('Cookie', authCookie(owner.id)).send({ name: 'Jake' });
+    const addJake = (tripId: number) => request(app)
+      .post(`/api/trips/${tripId}/guests`).set('Cookie', authCookie(owner.id)).send({ name: 'Jake' });
 
     const a = await addJake(tripA.id);
     const b = await addJake(tripB.id);
@@ -882,9 +863,7 @@ describe('Trip members', () => {
       .send({ name: 'Junior' });
     expect(renamed.status).toBe(200);
     // #1446: the human name lives in display_name now (username is a non-shown uuid handle)
-    expect((testDb.prepare('SELECT display_name FROM users WHERE id = ?').get(guestId) as any).display_name).toBe(
-      'Junior',
-    );
+    expect((testDb.prepare('SELECT display_name FROM users WHERE id = ?').get(guestId) as any).display_name).toBe('Junior');
 
     const removed = await request(app)
       .delete(`/api/trips/${trip.id}/guests/${guestId}`)
@@ -918,9 +897,7 @@ describe('Trip members', () => {
     addTripMember(testDb, trip.id, member.id);
 
     // Restrict member management to trip_owner (default)
-    testDb
-      .prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('perm_member_manage', 'trip_owner')")
-      .run();
+    testDb.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('perm_member_manage', 'trip_owner')").run();
     invalidatePermissionsCache();
 
     const res = await request(app)
@@ -937,7 +914,9 @@ describe('Trip members', () => {
     const { user: stranger } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: 'Private Trip' });
 
-    const res = await request(app).get(`/api/trips/${trip.id}/members`).set('Cookie', authCookie(stranger.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/members`)
+      .set('Cookie', authCookie(stranger.id));
 
     expect(res.status).toBe(404);
   });
@@ -952,7 +931,10 @@ describe('Copy trip', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'Original Trip', description: 'Desc' });
 
-    const res = await request(app).post(`/api/trips/${trip.id}/copy`).set('Cookie', authCookie(user.id)).send({});
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/copy`)
+      .set('Cookie', authCookie(user.id))
+      .send({});
 
     expect(res.status).toBe(201);
     expect(res.body.trip).toBeDefined();
@@ -979,7 +961,10 @@ describe('Copy trip', () => {
     const trip = createTrip(testDb, owner.id, { title: 'Shared Trip' });
     addTripMember(testDb, trip.id, member.id);
 
-    const res = await request(app).post(`/api/trips/${trip.id}/copy`).set('Cookie', authCookie(member.id)).send({});
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/copy`)
+      .set('Cookie', authCookie(member.id))
+      .send({});
 
     expect(res.status).toBe(201);
     const newTrip = testDb.prepare('SELECT * FROM trips WHERE id = ?').get(res.body.trip.id) as any;
@@ -991,7 +976,10 @@ describe('Copy trip', () => {
     const { user: stranger } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: 'Private Trip' });
 
-    const res = await request(app).post(`/api/trips/${trip.id}/copy`).set('Cookie', authCookie(stranger.id)).send({});
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/copy`)
+      .set('Cookie', authCookie(stranger.id))
+      .send({});
 
     expect(res.status).toBe(404);
   });
@@ -999,7 +987,10 @@ describe('Copy trip', () => {
   it('TRIP-024 — copy of non-existent trip returns 404', async () => {
     const { user } = createUser(testDb);
 
-    const res = await request(app).post('/api/trips/999999/copy').set('Cookie', authCookie(user.id)).send({});
+    const res = await request(app)
+      .post('/api/trips/999999/copy')
+      .set('Cookie', authCookie(user.id))
+      .send({});
 
     expect(res.status).toBe(404);
   });
@@ -1014,7 +1005,9 @@ describe('ICS export', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'Calendar Trip' });
 
-    const res = await request(app).get(`/api/trips/${trip.id}/export.ics`).set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/export.ics`)
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/calendar/);
@@ -1027,7 +1020,9 @@ describe('ICS export', () => {
     const { user: stranger } = createUser(testDb);
     const trip = createTrip(testDb, owner.id, { title: 'Private Trip' });
 
-    const res = await request(app).get(`/api/trips/${trip.id}/export.ics`).set('Cookie', authCookie(stranger.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/export.ics`)
+      .set('Cookie', authCookie(stranger.id));
 
     expect(res.status).toBe(404);
   });
@@ -1038,6 +1033,24 @@ describe('ICS export', () => {
 
     const res = await request(app).get(`/api/trips/${trip.id}/export.ics`);
     expect(res.status).toBe(401);
+  });
+
+  it('TRIP-025b — the trip payload never carries feed_token, not even for the owner', async () => {
+    // feed_token is the sole credential for the anonymous ICS feed. TRIP_SELECT
+    // reads `t.*`, so without the blanking it ships in every trip response and
+    // gating /feed/token on share_manage would achieve nothing: any member
+    // could read the value straight out of GET /api/trips/:id.
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { title: 'Trip' });
+    testDb.prepare('UPDATE trips SET feed_token = ? WHERE id = ?').run('secret-feed-token', trip.id);
+
+    const one = await request(app).get(`/api/trips/${trip.id}`).set('Cookie', authCookie(user.id));
+    expect(one.status).toBe(200);
+    expect(one.body.trip.feed_token ?? null).toBeNull();
+    expect(JSON.stringify(one.body)).not.toContain('secret-feed-token');
+
+    const list = await request(app).get('/api/trips').set('Cookie', authCookie(user.id));
+    expect(JSON.stringify(list.body)).not.toContain('secret-feed-token');
   });
 });
 
@@ -1061,15 +1074,11 @@ describe('Copy trip with data', () => {
     const place = createPlace(testDb, trip.id, { name: 'Tower Bridge' });
     const tag = createTag(testDb, user.id, { name: 'Landmark' });
     testDb.prepare('INSERT INTO place_tags (place_id, tag_id) VALUES (?, ?)').run(place.id, tag.id);
-    const additionalCategory = createCategory(testDb, { name: 'Architecture' });
-    testDb
-      .prepare('INSERT INTO place_additional_categories (place_id, category_id) VALUES (?, ?)')
-      .run(place.id, additionalCategory.id);
 
     // Day assignment
-    testDb
-      .prepare('INSERT INTO day_assignments (day_id, place_id, order_index, notes) VALUES (?, ?, 0, ?)')
-      .run(days[0].id, place.id, 'Visit in morning');
+    testDb.prepare(
+      'INSERT INTO day_assignments (day_id, place_id, order_index, notes) VALUES (?, ?, 0, ?)'
+    ).run(days[0].id, place.id, 'Visit in morning');
 
     // Accommodation spanning days 0→1
     createDayAccommodation(testDb, trip.id, place.id, days[0].id, days[1].id);
@@ -1105,25 +1114,15 @@ describe('Copy trip with data', () => {
     expect(newPlaces[0].name).toBe('Tower Bridge');
 
     // Place tag copied
-    const newTags = testDb
-      .prepare('SELECT pt.* FROM place_tags pt JOIN places p ON p.id = pt.place_id WHERE p.trip_id = ?')
-      .all(newId) as any[];
+    const newTags = testDb.prepare(
+      'SELECT pt.* FROM place_tags pt JOIN places p ON p.id = pt.place_id WHERE p.trip_id = ?'
+    ).all(newId) as any[];
     expect(newTags).toHaveLength(1);
 
-    const newAdditionalCategories = testDb
-      .prepare(
-        `SELECT pac.category_id
-         FROM place_additional_categories pac
-         JOIN places p ON p.id = pac.place_id
-         WHERE p.trip_id = ?`,
-      )
-      .all(newId);
-    expect(newAdditionalCategories).toEqual([{ category_id: additionalCategory.id }]);
-
     // Assignment copied
-    const newAssignments = testDb
-      .prepare('SELECT da.* FROM day_assignments da JOIN days d ON d.id = da.day_id WHERE d.trip_id = ?')
-      .all(newId) as any[];
+    const newAssignments = testDb.prepare(
+      'SELECT da.* FROM day_assignments da JOIN days d ON d.id = da.day_id WHERE d.trip_id = ?'
+    ).all(newId) as any[];
     expect(newAssignments).toHaveLength(1);
 
     // Accommodation copied
@@ -1154,21 +1153,15 @@ describe('Copy trip with data', () => {
     const trip = createTrip(testDb, user.id, { title: 'Todo Trip' });
 
     // Two todos: one checked and assigned — both should arrive unchecked and unassigned
-    testDb
-      .prepare(
-        'INSERT INTO todo_items (trip_id, name, checked, category, sort_order, due_date, description, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(trip.id, 'Buy tickets', 0, 'Transport', 0, '2026-06-01', 'Check Ryanair', 1);
-    testDb
-      .prepare(
-        'INSERT INTO todo_items (trip_id, name, checked, category, sort_order, assigned_user_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      )
-      .run(trip.id, 'Book hotel', 1, 'Accommodation', 1, user.id, 0);
+    testDb.prepare(
+      'INSERT INTO todo_items (trip_id, name, checked, category, sort_order, due_date, description, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(trip.id, 'Buy tickets', 0, 'Transport', 0, '2026-06-01', 'Check Ryanair', 1);
+    testDb.prepare(
+      'INSERT INTO todo_items (trip_id, name, checked, category, sort_order, assigned_user_id, priority) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(trip.id, 'Book hotel', 1, 'Accommodation', 1, user.id, 0);
 
     // Two budget category order rows
-    const insOrder = testDb.prepare(
-      'INSERT INTO budget_category_order (trip_id, category, sort_order) VALUES (?, ?, ?)',
-    );
+    const insOrder = testDb.prepare('INSERT INTO budget_category_order (trip_id, category, sort_order) VALUES (?, ?, ?)');
     insOrder.run(trip.id, 'Transport', 0);
     insOrder.run(trip.id, 'Accommodation', 1);
 
@@ -1181,9 +1174,7 @@ describe('Copy trip with data', () => {
     const newId = res.body.trip.id;
 
     // Todos copied with checked reset and assigned_user_id nulled
-    const newTodos = testDb
-      .prepare('SELECT * FROM todo_items WHERE trip_id = ? ORDER BY sort_order')
-      .all(newId) as any[];
+    const newTodos = testDb.prepare('SELECT * FROM todo_items WHERE trip_id = ? ORDER BY sort_order').all(newId) as any[];
     expect(newTodos).toHaveLength(2);
     expect(newTodos[0].name).toBe('Buy tickets');
     expect(newTodos[0].category).toBe('Transport');
@@ -1197,9 +1188,7 @@ describe('Copy trip with data', () => {
     expect(newTodos[1].assigned_user_id).toBeNull();
 
     // Budget category order copied
-    const newOrder = testDb
-      .prepare('SELECT category, sort_order FROM budget_category_order WHERE trip_id = ? ORDER BY sort_order')
-      .all(newId) as any[];
+    const newOrder = testDb.prepare('SELECT category, sort_order FROM budget_category_order WHERE trip_id = ? ORDER BY sort_order').all(newId) as any[];
     expect(newOrder).toHaveLength(2);
     expect(newOrder[0]).toMatchObject({ category: 'Transport', sort_order: 0 });
     expect(newOrder[1]).toMatchObject({ category: 'Accommodation', sort_order: 1 });
@@ -1215,7 +1204,9 @@ describe('Trip bundle', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { start_date: '2026-07-01', end_date: '2026-07-03' });
 
-    const res = await request(app).get(`/api/trips/${trip.id}/bundle`).set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(200);
     expect(res.body.trip).toBeDefined();
@@ -1233,7 +1224,9 @@ describe('Trip bundle', () => {
   it('BUNDLE-002 — returns 404 for trip that does not exist', async () => {
     const { user } = createUser(testDb);
 
-    const res = await request(app).get('/api/trips/999999/bundle').set('Cookie', authCookie(user.id));
+    const res = await request(app)
+      .get('/api/trips/999999/bundle')
+      .set('Cookie', authCookie(user.id));
 
     expect(res.status).toBe(404);
   });
@@ -1243,7 +1236,9 @@ describe('Trip bundle', () => {
     const { user: other } = createUser(testDb);
     const trip = createTrip(testDb, owner.id);
 
-    const res = await request(app).get(`/api/trips/${trip.id}/bundle`).set('Cookie', authCookie(other.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(other.id));
 
     expect(res.status).toBe(404);
   });
@@ -1254,7 +1249,9 @@ describe('Trip bundle', () => {
     const trip = createTrip(testDb, owner.id);
     testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
 
-    const res = await request(app).get(`/api/trips/${trip.id}/bundle`).set('Cookie', authCookie(member.id));
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(member.id));
 
     expect(res.status).toBe(200);
     expect(res.body.trip.id).toBe(trip.id);
@@ -1267,5 +1264,101 @@ describe('Trip bundle', () => {
     const res = await request(app).get(`/api/trips/${trip.id}/bundle`);
 
     expect(res.status).toBe(401);
+  });
+
+  it('BUNDLE-006 — packingItems are scoped to the viewer: another member\'s private item stays out (#858)', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
+    testDb.prepare('INSERT INTO packing_items (trip_id, name, checked, sort_order) VALUES (?, ?, 0, 0)').run(trip.id, 'Tent');
+    testDb.prepare('INSERT INTO packing_items (trip_id, name, checked, sort_order, is_private, owner_id) VALUES (?, ?, 0, 1, 1, ?)').run(trip.id, 'Secret gift', owner.id);
+
+    const ownerView = await request(app).get(`/api/trips/${trip.id}/bundle`).set('Cookie', authCookie(owner.id));
+    expect(ownerView.body.packingItems.map((i: { name: string }) => i.name).sort()).toEqual(['Secret gift', 'Tent']);
+
+    const memberView = await request(app).get(`/api/trips/${trip.id}/bundle`).set('Cookie', authCookie(member.id));
+    expect(memberView.body.packingItems.map((i: { name: string }) => i.name)).toEqual(['Tent']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cover upload parity (TRIP-P01…P05) — written BEFORE the storage-upload swap.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Trip cover upload parity', () => {
+  const fsMod = require('fs') as typeof import('fs');
+  const pathMod = require('path') as typeof import('path');
+  const FIXTURE_IMG = pathMod.join(__dirname, '../fixtures/small-image.jpg');
+  const coversDir = pathMod.join(__dirname, '../../uploads/covers');
+
+  afterAll(() => {
+    fsMod.rmSync(coversDir, { recursive: true, force: true });
+  });
+
+  it('TRIP-P01 — cover upload returns /uploads/covers/<uuid> and writes the file', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/cover`)
+      .set('Cookie', authCookie(user.id))
+      .attach('cover', FIXTURE_IMG, 'cover.png');
+    expect(res.status).toBe(201);
+    expect(res.body.cover_image).toMatch(/^\/uploads\/covers\/[0-9a-f-]{36}\.png$/);
+    const diskName = res.body.cover_image.replace('/uploads/covers/', '');
+    expect(fsMod.existsSync(pathMod.join(coversDir, diskName))).toBe(true);
+  });
+
+  it('TRIP-P02 — re-upload deletes the previous cover file', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const first = await request(app)
+      .post(`/api/trips/${trip.id}/cover`)
+      .set('Cookie', authCookie(user.id))
+      .attach('cover', FIXTURE_IMG, 'one.jpg');
+    const firstName = first.body.cover_image.replace('/uploads/covers/', '');
+    expect(fsMod.existsSync(pathMod.join(coversDir, firstName))).toBe(true);
+
+    const second = await request(app)
+      .post(`/api/trips/${trip.id}/cover`)
+      .set('Cookie', authCookie(user.id))
+      .attach('cover', FIXTURE_IMG, 'two.jpg');
+    expect(second.status).toBe(201);
+    expect(fsMod.existsSync(pathMod.join(coversDir, firstName))).toBe(false);
+  });
+
+  it('TRIP-P03 — no file → 400 "No image uploaded"', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/cover`)
+      .set('Cookie', authCookie(user.id));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('No image uploaded');
+  });
+
+  it('TRIP-P04 — non-image upload is 500 (plain-Error filter quirk — pinned, do not "fix")', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/cover`)
+      .set('Cookie', authCookie(user.id))
+      .attach('cover', Buffer.from('plain text'), { filename: 'doc.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(500);
+  });
+
+  it('TRIP-P05 — unknown trip → 404 "Trip not found"', async () => {
+    const { user } = createUser(testDb);
+
+    const res = await request(app)
+      .post('/api/trips/999999/cover')
+      .set('Cookie', authCookie(user.id))
+      .attach('cover', FIXTURE_IMG);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Trip not found');
   });
 });

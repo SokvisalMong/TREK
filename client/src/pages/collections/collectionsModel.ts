@@ -1,8 +1,8 @@
-import type { CollectionLabel, CollectionPlace, CollectionStatus } from '@trek/shared';
-import { COLLECTION_STATUSES, matchesPlaceCategory } from '@trek/shared';
-import type { LucideIcon } from 'lucide-react';
-import { Bookmark, CheckCircle2, Circle } from 'lucide-react';
-import type { StatusFilter } from '../../store/collectionStore';
+import { Circle, Bookmark, CheckCircle2 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import type { CollectionPlace, CollectionStatus, CollectionLabel } from '@trek/shared'
+import { COLLECTION_STATUSES, matchesPlaceCategory } from '@trek/shared'
+import type { StatusFilter, CollectionSortMode } from '../../store/collectionStore'
 
 /**
  * Pure data shaping + presentation metadata for the Collections page. No React
@@ -11,37 +11,41 @@ import type { StatusFilter } from '../../store/collectionStore';
  */
 
 export interface StatusMeta {
-  icon: LucideIcon;
+  icon: LucideIcon
   /** i18n key for the human label. */
-  labelKey: string;
+  labelKey: string
   /** CSS colour token / hex for the badge on a light/surface background. */
-  color: string;
+  color: string
   /** Brighter variant for a pill sitting over a photo cover / the hero scrim. */
-  coverColor: string;
+  coverColor: string
 }
 
 export const STATUS_META: Record<CollectionStatus, StatusMeta> = {
   idea: { icon: Circle, labelKey: 'collections.status.idea', color: 'var(--text-muted)', coverColor: '#e5e7eb' },
   want: { icon: Bookmark, labelKey: 'collections.status.want', color: 'var(--accent)', coverColor: '#c7d2fe' },
   visited: { icon: CheckCircle2, labelKey: 'collections.status.visited', color: '#10b981', coverColor: '#6ee7b7' },
-};
+}
 
 /** Stable order for the filter chips + the one-tap cycle. */
-export const STATUS_ORDER: CollectionStatus[] = [...COLLECTION_STATUSES];
+export const STATUS_ORDER: CollectionStatus[] = [...COLLECTION_STATUSES]
 
 /** idea → want → visited → idea */
 export function nextStatus(status: CollectionStatus): CollectionStatus {
-  const i = STATUS_ORDER.indexOf(status);
-  return STATUS_ORDER[(i + 1) % STATUS_ORDER.length];
+  const i = STATUS_ORDER.indexOf(status)
+  return STATUS_ORDER[(i + 1) % STATUS_ORDER.length]
 }
 
-/** Sort places by explicit sort_order, falling back to created_at (newest first). */
-export function sortPlaces(places: CollectionPlace[]): CollectionPlace[] {
+/** Order the places for display. 'default' keeps the saved order (sort_order,
+ *  then newest first); 'name_asc' sorts alphabetically by name (locale-aware). */
+export function sortPlaces(places: CollectionPlace[], mode: CollectionSortMode = 'default'): CollectionPlace[] {
+  if (mode === 'name_asc') {
+    return [...places].sort((a, b) => a.name.localeCompare(b.name))
+  }
   return [...places].sort((a, b) => {
-    const so = (a.sort_order ?? 0) - (b.sort_order ?? 0);
-    if (so !== 0) return so;
-    return (b.created_at ?? '').localeCompare(a.created_at ?? '');
-  });
+    const so = (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    if (so !== 0) return so
+    return (b.created_at ?? '').localeCompare(a.created_at ?? '')
+  })
 }
 
 /** Apply the active status filter + free-text search (name/address/notes) +
@@ -53,91 +57,78 @@ export function filterPlaces(
   statusFilter: StatusFilter,
   search: string,
   categoryFilter: number | 'all' = 'all',
-  labelFilter: number[] = []
+  labelFilter: number[] = [],
+  ratingFilter: number | 'all' = 'all',
 ): CollectionPlace[] {
-  const q = search.trim().toLowerCase();
-  return places.filter((p) => {
-    if (!p) return false;
-    if (statusFilter !== 'all' && p.status !== statusFilter) return false;
-    if (categoryFilter !== 'all' && !matchesPlaceCategory(p, categoryFilter)) return false;
-    if (labelFilter.length && !labelFilter.some((id) => (p.label_ids ?? []).includes(id))) return false;
-    if (!q) return true;
+  const q = search.trim().toLowerCase()
+  return places.filter(p => {
+    if (!p) return false
+    if (statusFilter !== 'all' && p.status !== statusFilter) return false
+    if (categoryFilter !== 'all' && !matchesPlaceCategory(p, categoryFilter)) return false
+    // Minimum-average-stars filter (#1435): unrated places drop out once a floor is set.
+    if (ratingFilter !== 'all' && (p.rating_avg == null || p.rating_avg < ratingFilter)) return false
+    if (labelFilter.length && !labelFilter.some(id => (p.label_ids ?? []).includes(id))) return false
+    if (!q) return true
     return (
       p.name.toLowerCase().includes(q) ||
       (p.address ?? '').toLowerCase().includes(q) ||
       (p.notes ?? '').toLowerCase().includes(q)
-    );
-  });
+    )
+  })
 }
 
 /** Count places per status for the filter chips. */
 export function statusCounts(places: CollectionPlace[]): Record<StatusFilter, number> {
-  const counts: Record<StatusFilter, number> = { all: 0, idea: 0, want: 0, visited: 0 };
-  for (const p of places) {
-    if (!p) continue;
-    counts.all += 1;
-    counts[p.status] += 1;
-  }
-  return counts;
+  const counts: Record<StatusFilter, number> = { all: 0, idea: 0, want: 0, visited: 0 }
+  for (const p of places) { if (!p) continue; counts.all += 1; counts[p.status] += 1 }
+  return counts
 }
 
-export interface CategoryOption {
-  id: number;
-  name: string;
-  color: string | null;
-  icon: string | null;
-  count: number;
-}
+export interface CategoryOption { id: number; name: string; color: string | null; icon: string | null; count: number }
 
-/** Distinct primary and additional categories present across places, with per-category counts. */
+/** Distinct categories actually present across the given places, with counts. */
 export function presentCategories(places: CollectionPlace[]): CategoryOption[] {
-  const byId = new Map<number, CategoryOption>();
+  const byId = new Map<number, CategoryOption>()
   for (const place of places) {
-    if (!place) continue;
-    const categories = [...(place.category ? [place.category] : []), ...(place.additional_categories ?? [])];
-    const countedIds = new Set<number>();
+    if (!place) continue
+    const categories = [...(place.category ? [place.category] : []), ...(place.additional_categories ?? [])]
+    const countedIds = new Set<number>()
     for (const category of categories) {
-      if (countedIds.has(category.id)) continue;
-      countedIds.add(category.id);
-      const existing = byId.get(category.id);
-      if (existing) {
-        existing.count += 1;
-      } else {
+      if (countedIds.has(category.id)) continue
+      countedIds.add(category.id)
+      const existing = byId.get(category.id)
+      if (existing) existing.count += 1
+      else {
         byId.set(category.id, {
           id: category.id,
           name: category.name ?? '',
           color: category.color ?? null,
           icon: category.icon ?? null,
           count: 1,
-        });
+        })
       }
     }
   }
-  return [...byId.values()].sort((left, right) => left.name.localeCompare(right.name));
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
-export interface LabelOption {
-  id: number;
-  name: string;
-  color: string | null;
-  count: number;
-}
+export interface LabelOption { id: number; name: string; color: string | null; count: number }
 
 /** The collection's labels in definition order, each with how many of the given
  *  places carry it. Zero-count labels are kept so the manager/filter still lists
  *  a freshly-created label. */
 export function presentLabels(labels: CollectionLabel[], places: CollectionPlace[]): LabelOption[] {
-  const counts = new Map<number, number>();
+  const counts = new Map<number, number>()
   for (const p of places) {
-    if (!p) continue;
-    for (const id of p.label_ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
+    if (!p) continue
+    for (const id of p.label_ids ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
   }
-  return labels.map((l) => ({ id: l.id, name: l.name, color: l.color ?? null, count: counts.get(l.id) ?? 0 }));
+  return labels.map(l => ({ id: l.id, name: l.name, color: l.color ?? null, count: counts.get(l.id) ?? 0 }))
 }
 
 /** Only the places that can render on a map. */
 export function mappablePlaces(places: CollectionPlace[]): CollectionPlace[] {
-  return places.filter((p) => p && typeof p.lat === 'number' && typeof p.lng === 'number');
+  return places.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number')
 }
 
 /**
@@ -147,7 +138,7 @@ export function mappablePlaces(places: CollectionPlace[]): CollectionPlace[] {
  * http/https.
  */
 export function normalizeLinkUrl(url: string): string {
-  const u = url.trim();
-  if (!u) return '';
-  return /^https?:\/\//i.test(u) ? u : `https://${u.replace(/^\/+/, '')}`;
+  const u = url.trim()
+  if (!u) return ''
+  return /^https?:\/\//i.test(u) ? u : `https://${u.replace(/^\/+/, '')}`
 }
