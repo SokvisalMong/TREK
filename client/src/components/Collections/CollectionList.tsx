@@ -64,10 +64,10 @@ export default function CollectionList({
                 else onOpenPlace(place.id);
               }
             }}
-            className={`col-lrow${active || selected ? 'sel' : ''}`}
+            className={active || selected ? 'col-lrow sel' : 'col-lrow'}
           >
             {selectMode ? (
-              <span className={`col-lcheck${selected ? 'on' : ''}`}>
+              <span className={selected ? 'col-lcheck on' : 'col-lcheck'}>
                 {selected && <Check size={14} strokeWidth={3} />}
               </span>
             ) : (

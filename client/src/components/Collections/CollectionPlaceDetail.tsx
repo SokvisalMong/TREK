@@ -195,7 +195,11 @@ export default function CollectionPlaceDetail({
   const CatIcon = getCategoryIcon(place.category?.icon);
 
   return (
-    <div className={`col-detail${anchorRect ? 'docked' : ''}`} style={dockStyle} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={anchorRect ? 'col-detail docked' : 'col-detail'}
+      style={dockStyle}
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="col-detail-cover" style={banner ? undefined : { backgroundImage: entityGradient(place.id) }}>
         {banner && <img src={banner} alt="" />}
         <div className="col-detail-cover-scrim" />
@@ -246,7 +250,7 @@ export default function CollectionPlaceDetail({
                 <button
                   type="button"
                   onClick={() => selectPrimaryCategory(null)}
-                  className={`col-detail-cat${categoryId == null ? 'on' : ''}`}
+                  className={categoryId == null ? 'col-detail-cat on' : 'col-detail-cat'}
                 >
                   {t('collections.noCategory')}
                 </button>
@@ -258,7 +262,7 @@ export default function CollectionPlaceDetail({
                       key={cat.id}
                       type="button"
                       onClick={() => selectPrimaryCategory(cat.id)}
-                      className={`col-detail-cat${selected ? 'on' : ''}`}
+                      className={selected ? 'col-detail-cat on' : 'col-detail-cat'}
                       style={{ ['--cat' as string]: cat.color || '#6366f1' }}
                     >
                       <Icon size={12} /> {cat.name}
@@ -282,7 +286,7 @@ export default function CollectionPlaceDetail({
                         key={cat.id}
                         type="button"
                         onClick={() => toggleAdditionalCategory(cat.id)}
-                        className={`col-detail-cat${selected ? 'on' : ''}`}
+                        className={selected ? 'col-detail-cat on' : 'col-detail-cat'}
                         style={{ ['--cat' as string]: cat.color || '#6366f1' }}
                       >
                         {selected && <Check size={11} />} {cat.name}
@@ -305,7 +309,7 @@ export default function CollectionPlaceDetail({
                         key={l.id}
                         type="button"
                         onClick={() => toggleLabel(l.id)}
-                        className={`col-detail-cat${on ? 'on' : ''}`}
+                        className={on ? 'col-detail-cat on' : 'col-detail-cat'}
                         style={{ ['--cat' as string]: l.color || '#6366f1' }}
                       >
                         <span className="col-labelchip-dot" /> {l.name}

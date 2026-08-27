@@ -1,4 +1,4 @@
-// FE-COMP-COLLIST-001 to FE-COMP-COLLIST-010
+// FE-COMP-COLLIST-001 to FE-COMP-COLLIST-012
 import { render, screen } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import type { CollectionPlace } from '@trek/shared';
@@ -156,5 +156,17 @@ describe('CollectionList', () => {
     // but every place name must sit inside a .col-lrow row element.
     expect(screen.getByText('Blue Bottle Coffee').closest('.col-lrow')).toBeInTheDocument();
     expect(screen.getByText('Golden Gate Bridge').closest('.col-lrow')).toBeInTheDocument();
+  });
+
+  it('FE-COMP-COLLIST-011: marks the active place row with the selection class', () => {
+    renderList({ selectedPlaceId: 101 });
+    const row = screen.getByText('Blue Bottle Coffee').closest('.col-lrow') as HTMLElement;
+    expect(row).toHaveClass('sel');
+  });
+
+  it('FE-COMP-COLLIST-012: marks selected rows in select mode', () => {
+    renderList({ selectMode: true, selectedIds: [202] });
+    const check = screen.getByText('Golden Gate Bridge').closest('.col-lrow')?.querySelector('.col-lcheck');
+    expect(check).toHaveClass('on');
   });
 });

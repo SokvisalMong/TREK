@@ -1,4 +1,4 @@
-// FE-COMP-COLDETAIL-001 to FE-COMP-COLDETAIL-010
+// FE-COMP-COLDETAIL-001 to FE-COMP-COLDETAIL-011
 import userEvent from '@testing-library/user-event';
 import type { CollectionPlace } from '@trek/shared';
 import { http, HttpResponse } from 'msw';
@@ -115,9 +115,13 @@ describe('CollectionPlaceDetail', () => {
 
     expect(screen.getByText('Cafe')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.getAllByRole('button', { name: 'Cafe' }).some((button) => button.classList.contains('on'))).toBe(
+      true
+    );
     await user.click(screen.getByRole('button', { name: /Save/i }));
     expect(props.onSave).toHaveBeenCalledWith(expect.objectContaining({ additional_category_ids: [cafe.id] }));
   });
+
   // ── Viewer (no edit / no delete) ────────────────────────────────────────────
   it('FE-COMP-COLDETAIL-006: hides Edit and Remove buttons when canEdit=false && canDelete=false', async () => {
     renderDetail({ canEdit: false, canDelete: false });
@@ -154,5 +158,11 @@ describe('CollectionPlaceDetail', () => {
     const props = renderDetail({ canEdit: false, canDelete: false });
     await user.click(await screen.findByRole('button', { name: 'Copy to trip' }));
     expect(props.onCopyToTrip).toHaveBeenCalledTimes(1);
+  });
+
+  it('FE-COMP-COLDETAIL-011: applies the docked class when anchored to the list column', async () => {
+    renderDetail({ anchorRect: { left: 24, width: 500 } });
+    const heading = await screen.findByRole('heading', { name: 'Test Cafe' });
+    expect(heading.closest('.col-detail')).toHaveClass('docked');
   });
 });
